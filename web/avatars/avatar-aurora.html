@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No color-scheme meta on purpose: when an embedder's scheme differs, Chrome paints an opaque
+     backdrop behind the frame, which would put a box around the transparent orb. -->
+<title>Cairn avatar: Aurora Orb</title>
+<!--
+  Cairn "Aurora Orb" avatar.
+  A luminous glass sphere filled with slowly flowing blue / cyan / violet / white
+  clouds (WebGL1 fragment shader: domain-warped simplex fbm, two parallax layers,
+  fresnel rim light, glossy + sharp specular, bottom caustic, soft outer glow).
+  Falls back to a 2D canvas renderer when WebGL is unavailable.
+
+  API:   window.cairnAvatar.setState(state, { running, approvals })
+         state: 'idle' | 'working' | 'attention' | 'offline' | 'listening'
+  Hash:  #state=working&running=2&approvals=1
+         optional preview params: &renderer=2d  &from=idle  &sim=<seconds>
+-->
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; width: 100%; height: 100%; }
+  body { -webkit-user-select: none; user-select: none; cursor: default; }
+
+  .avatar {
+    position: fixed; left: 50%; top: 50%;
+    width: 100vmin; height: 100vmin;
+    transform: translate(-50%, -50%) scale(1);
+    transform-origin: 50% 50%;
+    transition: transform 320ms cubic-bezier(.2, .8, .2, 1);
+    will-change: transform;
+  }
+  .avatar:hover { transform: translate(-50%, -50%) scale(1.05); }
+  .avatar canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* Small overlay chips: approvals badge (top-right), running pip and offline dot (bottom-right). */
+  .chip {
+    position: absolute; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    font: 700 11vmin/1 -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Text", system-ui, "Helvetica Neue", sans-serif;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: #fff;
+    border-radius: 999px; pointer-events: none;
+    opacity: 0; transform: scale(.4);
+    transition: opacity 260ms ease, transform 480ms cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .chip.on { opacity: 1; transform: scale(1); }
+
+  .badge {
+    top: 11vmin; right: 12vmin;
+    min-width: 21vmin; height: 21vmin; padding: 0 5vmin;
+    background: radial-gradient(120% 120% at 30% 25%, #ff7a73 0%, #f23b36 45%, #d61f2c 100%);
+    border: 1.6vmin solid rgba(255, 255, 255, .92);
+    box-shadow: 0 1vmin 3vmin rgba(120, 10, 20, .35);
+    transform-origin: 70% 30%;
+  }
+  .badge.dotonly { min-width: 15vmin; height: 15vmin; padding: 0; top: 14vmin; right: 15vmin; }
+
+  .pip {
+    bottom: 13vmin; right: 12vmin;
+    min-width: 18vmin; height: 18vmin; padding: 0 4vmin;
+    font-size: 10vmin;
+    background: linear-gradient(160deg, rgba(40, 58, 120, .95), rgba(14, 22, 58, .95));
+    border: 1.2vmin solid rgba(190, 225, 255, .85);
+    box-shadow: 0 0 3vmin rgba(90, 170, 255, .45);
+    transform-origin: 70% 70%;
+  }
+
+  .dot {
+    bottom: 16vmin; right: 16vmin;
+    width: 12vmin; height: 12vmin;
+    background: radial-gradient(circle at 35% 30%, #b9bec6, #7d838c 70%);
+    border: 1.4vmin solid rgba(255, 255, 255, .85);
+    box-shadow: 0 .6vmin 1.6vmin rgba(0, 0, 0, .25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .avatar { transition-duration: 1ms; }
+    .chip { transition: opacity 260ms ease; }
+  }
+</style>
+</head>
+<body>
+<div class="avatar" id="avatar" aria-hidden="true">
+  <canvas id="orb"></canvas>
+  <div class="chip pip" id="pip"></div>
+  <div class="chip badge" id="badge"></div>
+  <div class="chip dot" id="dot"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- states
+  // Colours are linear-ish RGB 0..1. c0 deep field, c1 cyan current, c2 violet accent, c3 cloud highlight.
+  var PRESETS = {
+    idle: {
+      c0: [0.10, 0.21, 0.62], c1: [0.26, 0.72, 1.00], c2: [0.53, 0.42, 1.00], c3: [0.93, 0.97, 1.00],
+      glow: [0.36, 0.58, 1.00], glowAmt: 0.62, bright: 1.00, sat: 1.00, speed: 1.0, swirl: 0.85,
+      arc: 0, ripple: 0, pulse: 0, breathe: 1, shadow: 1
+    },
+    working: {
+      c0: [0.07, 0.17, 0.64], c1: [0.16, 0.82, 1.00], c2: [0.58, 0.36, 1.00], c3: [0.90, 0.98, 1.00],
+      glow: [0.30, 0.64, 1.00], glowAmt: 0.78, bright: 1.06, sat: 1.05, speed: 3.6, swirl: 1.35,
+      arc: 1, ripple: 0, pulse: 0, breathe: 0.4, shadow: 1
+    },
+    attention: {
+      c0: [0.58, 0.10, 0.18], c1: [1.00, 0.60, 0.22], c2: [1.00, 0.34, 0.40], c3: [1.00, 0.94, 0.80],
+      glow: [1.00, 0.50, 0.28], glowAmt: 0.80, bright: 1.04, sat: 1.00, speed: 1.5, swirl: 1.0,
+      arc: 0, ripple: 0, pulse: 1, breathe: 0, shadow: 1
+    },
+    offline: {
+      c0: [0.40, 0.42, 0.46], c1: [0.62, 0.65, 0.69], c2: [0.52, 0.54, 0.58], c3: [0.87, 0.88, 0.90],
+      glow: [0.55, 0.58, 0.63], glowAmt: 0.12, bright: 0.76, sat: 0.26, speed: 0.3, swirl: 0.6,
+      arc: 0, ripple: 0, pulse: 0, breathe: 0.5, shadow: 0.8
+    },
+    listening: {
+      c0: [0.10, 0.30, 0.82], c1: [0.36, 0.92, 1.00], c2: [0.52, 0.56, 1.00], c3: [0.96, 1.00, 1.00],
+      glow: [0.40, 0.80, 1.00], glowAmt: 0.92, bright: 1.14, sat: 1.05, speed: 2.2, swirl: 1.1,
+      arc: 0, ripple: 1, pulse: 0, breathe: 0.3, shadow: 1
+    }
+  };
+  var KEYS = Object.keys(PRESETS.idle);
+
+  function clone(o) { var r = {}; for (var k in o) r[k] = Array.isArray(o[k]) ? o[k].slice() : o[k]; return r; }
+
+  var reduceMQ = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  function reduced() { return !!(reduceMQ && reduceMQ.matches); }
+
+  var model = { state: 'idle', running: 0, approvals: 0 };
+  var target = clone(PRESETS.idle);
+  var cur = clone(PRESETS.idle);
+
+  // Flow clocks advance by dt * speed so speed changes never cause visual jumps.
+  var flowT = 17.3, arcAng = 1.2, ripPh = 0, clock = 0;
+
+  // ---------------------------------------------------------------- DOM chips
+  var elAvatar = document.getElementById('avatar');
+  var elPip = document.getElementById('pip');
+  var elBadge = document.getElementById('badge');
+  var elDot = document.getElementById('dot');
+
+  function fmtCount(n) { return n > 9 ? '9+' : String(n); }
+
+  function updateChips() {
+    var s = model.state;
+    var showPip = s === 'working' && model.running >= 2;
+    if (showPip) elPip.textContent = fmtCount(model.running);
+    elPip.classList.toggle('on', showPip);
+
+    var showBadge = s === 'attention';
+    if (showBadge) {
+      elBadge.textContent = model.approvals > 0 ? fmtCount(model.approvals) : '';
+      elBadge.classList.toggle('dotonly', !(model.approvals > 0));
+    }
+    elBadge.classList.toggle('on', showBadge);
+
+    elDot.classList.toggle('on', s === 'offline');
+  }
+
+  function toInt(v) { v = parseInt(v, 10); return isFinite(v) && v > 0 ? v : 0; }
+
+  function setState(state, info) {
+    info = info || {};
+    var running = toInt(info.running), approvals = toInt(info.approvals);
+    if (!PRESETS[state]) state = approvals > 0 ? 'attention' : running > 0 ? 'working' : 'idle';
+    model.state = state; model.running = running; model.approvals = approvals;
+    target = clone(PRESETS[state]);
+    updateChips();
+  }
+
+  function snap() { cur = clone(target); }
+
+  function readHash() {
+    var h = (location.hash || '').replace(/^#/, '');
+    var q = {};
+    h.split('&').forEach(function (kv) {
+      if (!kv) return;
+      var i = kv.indexOf('=');
+      var k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
+      q[k] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+    });
+    return q;
+  }
+
+  window.cairnAvatar = {
+    setState: function (state, info) { setState(String(state || ''), info); kick(); }
+  };
+
+  // ---------------------------------------------------------------- easing
+  function ease(dt) {
+    // tau 0.15 s: ~96% of the way in 500 ms, smooth exponential approach.
+    var k = 1 - Math.exp(-dt / 0.15);
+    for (var i = 0; i < KEYS.length; i++) {
+      var key = KEYS[i], a = cur[key], b = target[key];
+      if (Array.isArray(a)) { for (var j = 0; j < 3; j++) a[j] += (b[j] - a[j]) * k; }
+      else cur[key] = a + (b - a) * k;
+    }
+  }
+
+  function heartbeat(t) {
+    if (reduced()) return 0.5 + 0.5 * Math.sin(t * 2 * Math.PI / 3.2);
+    var ph = t % 1.25;
+    var a = (ph - 0.10) / 0.075, b = (ph - 0.34) / 0.09;
+    return Math.min(1, Math.exp(-a * a) + 0.62 * Math.exp(-b * b));
+  }
+
+  // ---------------------------------------------------------------- canvas
+  var canvas = document.getElementById('orb');
+  var W = 0, H = 0;
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var side = Math.max(1, Math.min(elAvatar.clientWidth, elAvatar.clientHeight));
+    var px = Math.max(1, Math.round(side * dpr));
+    if (px !== W) { W = H = px; canvas.width = W; canvas.height = H; if (gl) gl.viewport(0, 0, W, H); }
+  }
+
+  // ---------------------------------------------------------------- WebGL
+  var VS = 'attribute vec2 aPos; void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }';
+  var FS = [
+    '#ifdef GL_FRAGMENT_PRECISION_HIGH',
+    'precision highp float;',
+    '#else',
+    'precision mediump float;',
+    '#endif',
+    'uniform vec2 uRes;',
+    'uniform float uTime, uScale, uGlowAmt, uBright, uSat, uArc, uArcAng, uRipple, uRipPh, uSwirl, uShadow, uFlash;',
+    'uniform vec3 uC0, uC1, uC2, uC3, uGlow;',
+    // Ashima / Stefan Gustavson 3D simplex noise (MIT).
+    'vec3 mod289(vec3 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 mod289(vec4 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}',
+    'vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314*r;}',
+    'float snoise(vec3 v){',
+    '  const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);',
+    '  vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx);',
+    '  vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g;',
+    '  vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy);',
+    '  vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy;',
+    '  i = mod289(i);',
+    '  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));',
+    '  float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx;',
+    '  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);',
+    '  vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_);',
+    '  vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y);',
+    '  vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw);',
+    '  vec4 s0 = floor(b0)*2.0 + 1.0; vec4 s1 = floor(b1)*2.0 + 1.0; vec4 sh = -step(h, vec4(0.0));',
+    '  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;',
+    '  vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w);',
+    '  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));',
+    '  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;',
+    '  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m * m;',
+    '  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));',
+    '}',
+    'float fbm(vec3 p){ float s = 0.0, a = 0.5;',
+    '  for (int i = 0; i < 3; i++){ s += a * snoise(p); p = p * 1.97 + vec3(3.1, 1.7, 5.3); a *= 0.40; }',
+    '  return s; }',
+    'float fbm2(vec3 p){ return 0.5 * snoise(p) + 0.25 * snoise(p * 2.03 + vec3(3.1, 1.7, 5.3)); }',
+    'mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }',
+    'float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
+    'void main(){',
+    '  float m = min(uRes.x, uRes.y);',
+    '  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / m;',
+    '  float R = 0.36 * uScale;',
+    '  vec2 p = uv / R;',
+    '  float r = length(p);',
+    '  float px = 1.0 / (R * m);',
+    '  float t = uTime;',
+    '  float cover = 1.0 - smoothstep(1.0 - 1.8 * px, 1.0, r);',
+    '  vec3 sph = vec3(0.0);',
+    '  if (cover > 0.0) {',
+    '    float rc = min(r, 0.998);',
+    '    float z = sqrt(1.0 - rc * rc);',
+    '    vec3 n = vec3(p * (rc / max(r, 1e-4)), z);',
+    '    float rip = sin(r * 13.0 - uRipPh * 6.2831853) * 0.05 * uRipple;',
+    '    vec3 q = n;',
+    '    q.xz = rot(t * 0.10) * q.xz;',
+    '    q.yz = rot(0.35 + 0.06 * sin(t * 0.07)) * q.yz;',
+    '    vec3 w = vec3(snoise(q * 0.7 + vec3(0.0, 0.0, t * 0.12)),',
+    '                  snoise(q * 0.7 + vec3(4.7, 2.3, -t * 0.10)),',
+    '                  snoise(q * 0.7 + vec3(1.9, 7.1, t * 0.09)));',
+    '    vec3 qw = q * 0.95 + w * (0.50 * uSwirl) + rip;',
+    '    float fA = fbm(qw + vec3(0.0, t * 0.06, 0.0));',
+    '    vec3 qd = vec3(n.xy * 0.70, -z * 0.45);',
+    '    qd.xz = rot(-t * 0.07) * qd.xz;',
+    '    float fB = fbm2(qd * 1.25 + w * (0.35 * uSwirl) + vec3(t * 0.05, 0.0, 3.0));',
+    '    float diag = dot(n.xy, vec2(-0.55, 0.83)) * 0.5 + 0.5;',
+    '    vec3 col = mix(uC0, uC2, smoothstep(-0.40, 0.45, fB * 1.3 + (0.5 - diag) * 0.25));',
+    '    col = mix(col, uC1, smoothstep(-0.30, 0.55, fA * 1.1 + (diag - 0.5) * 0.9) * 0.9);',
+    '    float cloud = smoothstep(-0.02, 0.66, fA * 0.9 + fB * 0.35 + (diag - 0.5) * 0.50);',
+    '    col = mix(col, uC3, pow(cloud, 1.6) * 0.78);',
+    '    col *= 0.86 + 0.26 * diag;',
+    '    float fres = pow(1.0 - z, 2.4);',
+    '    vec3 rimCol = mix(uC1, uC3, 0.45);',
+    '    col = mix(col, rimCol, fres * 0.55);',
+    '    col += rimCol * pow(1.0 - z, 8.0) * 0.35;',
+    '    float cy = p.y + 0.80;',
+    '    float caust = exp(-(p.x * p.x * 2.4 + cy * cy * 12.0));',
+    '    col += mix(uC1, uC3, 0.55) * caust * 0.28;',
+    '    vec2 sp = (p - vec2(-0.32, 0.46)) * vec2(1.0, 1.5);',
+    '    float gloss = exp(-dot(sp, sp) * 5.5);',
+    '    vec2 sp2 = (p - vec2(-0.36, 0.52)) * vec2(1.0, 1.3);',
+    '    float spec = exp(-dot(sp2, sp2) * 60.0);',
+    '    col = mix(col, vec3(1.0), clamp(gloss * 0.24 + spec * 0.60, 0.0, 1.0));',
+    '    col = col * (uBright + uFlash * 0.12);',
+    '    sph = col;',
+    '  }',
+    '  float d = max(r - 1.0, 0.0);',
+    '  float lv = length(uv);',
+    '  float edge = 1.0 - smoothstep(0.36, 0.475, lv);',
+    '  float glow = (exp(-d * 5.0) * 0.75 + exp(-d * 14.0) * 0.35) * (uGlowAmt + uFlash * 0.35) * edge;',
+    '  vec2 ps = p - vec2(0.0, -0.09);',
+    '  float shd = exp(-max(length(ps) - 0.92, 0.0) * 8.0) * 0.20 * uShadow * edge;',
+    '  float ang = atan(p.y, p.x);',
+    '  float da = mod(ang - uArcAng, 6.2831853);',
+    '  float ra = 1.105;',
+    '  float wr = 0.027 + px * 1.0;',
+    '  float dr = (r - ra) / wr;',
+    '  float band = exp(-dr * dr);',
+    '  float tail = exp(-da * 0.62);',
+    '  vec2 hd = p - vec2(cos(uArcAng), sin(uArcAng)) * ra;',
+    '  float head = exp(-dot(hd, hd) / (wr * wr * 2.2));',
+    '  float halo = exp(-dr * dr / 16.0) * tail * 0.28;',
+    '  float arc = (band * (tail + 0.20) + head * 0.9 + halo) * uArc;',
+    '  float hot = clamp(head * 0.8 + band * tail * 0.35, 0.0, 1.0) * uArc;',
+    '  float rr = 0.0;',
+    '  for (int k = 0; k < 3; k++) {',
+    '    float ph = fract(uRipPh + float(k) / 3.0);',
+    '    float rad = 1.0 + ph * 0.30;',
+    '    float x = (r - rad) / (0.018 + 0.03 * ph);',
+    '    rr += exp(-x * x) * (1.0 - ph) * (1.0 - ph);',
+    '  }',
+    '  rr *= uRipple * edge;',
+    '  float ga = clamp(glow, 0.0, 1.0);',
+    '  vec4 o = vec4(0.0, 0.0, 0.0, shd * (1.0 - ga * 0.6));',
+    '  o = vec4(uGlow * ga + o.rgb * (1.0 - ga), ga + o.a * (1.0 - ga));',
+    '  float la = clamp(arc + rr * 0.7, 0.0, 1.0);',
+    // Arc body is a deeper, saturated tone so it still reads over light wallpapers; ripples stay pale.
+    '  vec3 lc = mix(mix(mix(uC1, uC0, 0.38), mix(uC1, uC3, 0.65), uRipple), vec3(1.0), hot);',
+    '  o = vec4(lc * la + o.rgb * (1.0 - la), la + o.a * (1.0 - la));',
+    '  o = vec4(sph * cover + o.rgb * (1.0 - cover), cover + o.a * (1.0 - cover));',
+    '  float lum = dot(o.rgb, vec3(0.299, 0.587, 0.114));',
+    '  o.rgb = mix(vec3(lum), o.rgb, uSat);',
+    '  o.rgb += (hash(gl_FragCoord.xy + fract(t * 3.7)) - 0.5) * (1.5 / 255.0) * o.a;',
+    '  gl_FragColor = vec4(clamp(o.rgb, 0.0, o.a), o.a);',
+    '}'
+  ].join('\n');
+
+  var gl = null, prog = null, U = {};
+  var UNIFORMS = ['uRes', 'uTime', 'uScale', 'uGlowAmt', 'uBright', 'uSat', 'uArc', 'uArcAng', 'uRipple',
+    'uRipPh', 'uSwirl', 'uShadow', 'uFlash', 'uC0', 'uC1', 'uC2', 'uC3', 'uGlow'];
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { var e = gl.getShaderInfoLog(s); gl.deleteShader(s); throw new Error(e); }
+    return s;
+  }
+
+  function initGL() {
+    var ctx = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'low-power' }) ||
+              canvas.getContext('experimental-webgl', { alpha: true, premultipliedAlpha: true });
+    if (!ctx) return false;
+    gl = ctx;
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    } catch (err) {
+      if (window.console) console.warn('[cairn-avatar] WebGL shader failed, using 2D fallback:', err);
+      gl = null; return false;
+    }
+    gl.useProgram(prog);
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    for (var i = 0; i < UNIFORMS.length; i++) U[UNIFORMS[i]] = gl.getUniformLocation(prog, UNIFORMS[i]);
+    gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0);
+    return true;
+  }
+
+  function drawGL(scale, flash) {
+    gl.viewport(0, 0, W, H);
+    gl.uniform2f(U.uRes, W, H);
+    gl.uniform1f(U.uTime, flowT);
+    gl.uniform1f(U.uScale, scale);
+    gl.uniform1f(U.uGlowAmt, cur.glowAmt);
+    gl.uniform1f(U.uBright, cur.bright);
+    gl.uniform1f(U.uSat, cur.sat);
+    gl.uniform1f(U.uArc, cur.arc);
+    gl.uniform1f(U.uArcAng, arcAng);
+    gl.uniform1f(U.uRipple, cur.ripple);
+    gl.uniform1f(U.uRipPh, ripPh);
+    gl.uniform1f(U.uSwirl, cur.swirl);
+    gl.uniform1f(U.uShadow, cur.shadow);
+    gl.uniform1f(U.uFlash, flash);
+    gl.uniform3fv(U.uC0, cur.c0); gl.uniform3fv(U.uC1, cur.c1);
+    gl.uniform3fv(U.uC2, cur.c2); gl.uniform3fv(U.uC3, cur.c3);
+    gl.uniform3fv(U.uGlow, cur.glow);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // ---------------------------------------------------------------- 2D fallback
+  var c2d = null;
+  function mixc(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  function grade(c) {
+    var l = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2], s = cur.sat, b = cur.bright;
+    return [(l + (c[0] - l) * s) * b, (l + (c[1] - l) * s) * b, (l + (c[2] - l) * s) * b];
+  }
+  function rgba(c, a) {
+    c = grade(c);
+    return 'rgba(' + Math.round(Math.min(1, Math.max(0, c[0])) * 255) + ',' + Math.round(Math.min(1, Math.max(0, c[1])) * 255) + ',' +
+      Math.round(Math.min(1, Math.max(0, c[2])) * 255) + ',' + Math.max(0, Math.min(1, a)).toFixed(3) + ')';
+  }
+
+  function draw2D(scale, flash) {
+    var ctx = c2d, m = W, cx = W / 2, cy = H / 2, R = 0.36 * m * scale, TAU = Math.PI * 2, t = flowT;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, W, H);
+
+    // soft shadow + outer glow
+    var edgeR = m * 0.475, ga = cur.glowAmt + flash * 0.35;
+    var sg = ctx.createRadialGradient(cx, cy + R * 0.09, R * 0.9, cx, cy + R * 0.09, edgeR);
+    sg.addColorStop(0, 'rgba(0,0,0,' + (0.16 * cur.shadow).toFixed(3) + ')'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sg; ctx.fillRect(0, 0, W, H);
+    var g = ctx.createRadialGradient(cx, cy, R * 0.96, cx, cy, edgeR);
+    g.addColorStop(0, rgba(cur.glow, 0.85 * ga)); g.addColorStop(0.3, rgba(cur.glow, 0.32 * ga));
+    g.addColorStop(0.7, rgba(cur.glow, 0.08 * ga)); g.addColorStop(1, rgba(cur.glow, 0));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    var lc = mixc(cur.c1, cur.c3, 0.65);
+    // listening ripples
+    if (cur.ripple > 0.01) {
+      for (var k = 0; k < 3; k++) {
+        var ph = (ripPh + k / 3) % 1;
+        ctx.beginPath(); ctx.arc(cx, cy, R * (1 + ph * 0.3), 0, TAU);
+        ctx.lineWidth = Math.max(1, R * (0.03 + 0.04 * ph));
+        ctx.strokeStyle = rgba(lc, 0.7 * cur.ripple * (1 - ph) * (1 - ph)); ctx.stroke();
+      }
+    }
+    // working arc: comet with fading tail (canvas y is down, so negate angles)
+    if (cur.arc > 0.01) {
+      var ra = R * 1.105, segs = 40, span = 3.6, alc = mixc(cur.c1, cur.c0, 0.38);
+      ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.arc(cx, cy, ra, 0, TAU); ctx.lineWidth = Math.max(1, R * 0.03);
+      ctx.strokeStyle = rgba(alc, 0.14 * cur.arc); ctx.stroke();
+      // Canvas angles run clockwise (y down): the head sits at -arcAng and the tail trails behind it.
+      // A conic gradient gives a seamless tail; the segmented path is only for older engines.
+      if (ctx.createConicGradient) {
+        var cg = ctx.createConicGradient(-arcAng - span, cx, cy);
+        for (var cs = 0; cs <= 12; cs++) {
+          var ang = span * (1 - cs / 12);               // distance behind the head, radians
+          cg.addColorStop(cs / 12 * span / TAU, rgba(alc, cur.arc * Math.exp(-ang * 0.62)));
+        }
+        cg.addColorStop(Math.min(1, span / TAU + 0.001), rgba(alc, 0));
+        ctx.beginPath(); ctx.arc(cx, cy, ra, -arcAng - span, -arcAng);
+        ctx.lineWidth = Math.max(1, R * 0.045);
+        ctx.strokeStyle = cg; ctx.stroke();
+        segs = 0;
+      }
+      for (var s = segs - 1; s >= 0; s--) {
+        var a0 = arcAng + span * s / segs, a1 = arcAng + span * (s + 1) / segs + 0.02;
+        ctx.beginPath(); ctx.arc(cx, cy, ra, -a1, -a0);
+        ctx.lineWidth = Math.max(1, R * 0.045 * (1 - s / segs * 0.6));
+        ctx.strokeStyle = rgba(mixc(alc, [1, 1, 1], s === 0 ? 0.6 : 0), cur.arc * Math.exp(-(a0 - arcAng) * 0.62)); ctx.stroke();
+      }
+      var hx0 = cx + Math.cos(-arcAng) * ra, hy0 = cy + Math.sin(-arcAng) * ra;
+      var hg = ctx.createRadialGradient(hx0, hy0, 0, hx0, hy0, R * 0.09);
+      hg.addColorStop(0, 'rgba(255,255,255,' + (0.9 * cur.arc).toFixed(3) + ')'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = hg; ctx.fillRect(hx0 - R * 0.1, hy0 - R * 0.1, R * 0.2, R * 0.2);
+    }
+
+    // sphere body
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip();
+    var base = ctx.createLinearGradient(0, cy - R, 0, cy + R);
+    base.addColorStop(0, rgba(mixc(cur.c0, cur.c1, 0.45), 1)); base.addColorStop(0.55, rgba(mixc(cur.c0, cur.c2, 0.6), 1)); base.addColorStop(1, rgba(cur.c0, 1));
+    ctx.fillStyle = base; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+    ctx.globalCompositeOperation = 'screen';
+    var blobs = [
+      [cur.c1, 0.60, 0.55, 0.31, 0.0, 0.50],
+      [cur.c3, 0.42, 0.40, 0.23, 2.1, 0.45],
+      [cur.c2, 0.66, 0.50, 0.19, 4.2, 0.50],
+      [cur.c1, 0.42, 0.62, 0.27, 1.3, 0.40],
+      [cur.c3, 0.30, 0.45, 0.37, 3.5, 0.25]
+    ];
+    for (var b = 0; b < blobs.length; b++) {
+      var B = blobs[b], ph2 = t * B[3] + B[4];
+      var bx = cx + Math.cos(ph2) * R * 0.45 * (1 + 0.2 * cur.swirl), by = cy + Math.sin(ph2 * 1.3 + b) * R * 0.40;
+      var br = R * B[1];
+      var gg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      gg.addColorStop(0, rgba(B[0], B[5])); gg.addColorStop(1, rgba(B[0], 0));
+      ctx.fillStyle = gg; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    var rim = ctx.createRadialGradient(cx, cy, R * 0.62, cx, cy, R);
+    rim.addColorStop(0, rgba(lc, 0)); rim.addColorStop(0.8, rgba(lc, 0.18)); rim.addColorStop(1, rgba(lc, 0.55));
+    ctx.fillStyle = rim; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+    var ca = ctx.createRadialGradient(cx, cy + R * 0.8, 0, cx, cy + R * 0.8, R * 0.6);
+    ca.addColorStop(0, rgba(lc, 0.35)); ca.addColorStop(1, rgba(lc, 0));
+    ctx.fillStyle = ca; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+    var hx = cx - R * 0.36, hy = cy - R * 0.46;
+    var sp = ctx.createRadialGradient(hx, hy, 0, hx, hy, R * 0.5);
+    sp.addColorStop(0, 'rgba(255,255,255,0.55)'); sp.addColorStop(0.18, 'rgba(255,255,255,0.22)'); sp.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sp; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------- loop
+  var raf = 0, lastDraw = 0, running = false;
+
+  function frame(now) {
+    raf = 0;
+    if (document.hidden) { running = false; return; }
+    raf = requestAnimationFrame(frame);
+    // Frame skipping: ~30 fps normally; 15 fps when motion is reduced or the orb is offline (slow anyway).
+    var frameMs = (reduced() || model.state === 'offline') ? 1000 / 15 : 1000 / 30;
+    if (lastDraw && now - lastDraw < frameMs - 2) return;
+    var dt = lastDraw ? Math.min((now - lastDraw) / 1000, 0.1) : 1 / 30;
+    lastDraw = now;
+    tick(dt);
+    render();
+  }
+
+  function tick(dt) {
+    ease(dt);
+    var rm = reduced() ? 0.25 : 1;
+    clock += dt;
+    flowT += dt * cur.speed * rm;
+    arcAng -= dt * (1.1 + 1.3 * cur.speed / 3.6) * rm;   // clockwise orbit
+    if (arcAng < -1000) arcAng += Math.PI * 2 * 100;
+    ripPh = (ripPh + dt * 0.55 * (reduced() ? 0.35 : 1)) % 1;
+  }
+
+  function render() {
+    resize();
+    var rm = reduced();
+    var beat = cur.pulse > 0.001 ? heartbeat(clock) * cur.pulse : 0;
+    var breath = Math.sin(clock * 2 * Math.PI / 5.5) * cur.breathe;
+    var scale = 1 + (rm ? 0.004 : 0.016) * breath + (rm ? 0 : 0.035) * beat;
+    var flash = beat + (rm ? 0 : 0.08 * breath);
+    if (gl) drawGL(scale, flash); else if (c2d) draw2D(scale, flash);
+  }
+
+  function kick() {
+    if (!running && !document.hidden) { running = true; lastDraw = 0; raf = requestAnimationFrame(frame); }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { if (raf) cancelAnimationFrame(raf); raf = 0; running = false; }
+    else kick();
+  });
+  window.addEventListener('resize', function () { resize(); if (!running) render(); });
+  window.addEventListener('hashchange', function () { applyHash(false); });
+
+  // GPU resets: wait briefly for a restore, otherwise swap in a fresh canvas with the 2D renderer.
+  var lostTimer = 0;
+  function watchContext(cv) {
+    cv.addEventListener('webglcontextlost', function (e) {
+      e.preventDefault(); gl = null;
+      clearTimeout(lostTimer);
+      lostTimer = setTimeout(function () {
+        if (gl || c2d) return;
+        var fresh = document.createElement('canvas');
+        fresh.id = 'orb';
+        canvas.parentNode.replaceChild(fresh, canvas);
+        canvas = fresh; W = H = 0;
+        c2d = canvas.getContext('2d');
+        render();
+      }, 2000);
+    });
+    cv.addEventListener('webglcontextrestored', function () {
+      clearTimeout(lostTimer);
+      if (c2d) return;
+      if (initGL()) { W = H = 0; render(); }
+    });
+  }
+  watchContext(canvas);
+
+  function applyHash(isInitial) {
+    var q = readHash();
+    if (!q.state && !isInitial) return;
+    setState(q.state || 'idle', { running: q.running, approvals: q.approvals });
+    if (!isInitial) return;
+    // Preview hooks for static screenshots (headless Chrome barely runs rAF under virtual time):
+    //   from=<state>  start in another state and ease towards `state`
+    //   sim=<seconds> pre-run the simulation, e.g. #state=working&from=idle&sim=0.2
+    if (PRESETS[q.from]) { var dest = target; target = clone(PRESETS[q.from]); snap(); target = dest; }
+    else snap();
+    var sim = parseFloat(q.sim);
+    if (sim > 0) for (var i = 0, n = Math.min(1800, Math.round(sim * 30)); i < n; i++) tick(1 / 30);
+  }
+
+  // ---------------------------------------------------------------- boot
+  var force2D = readHash().renderer === '2d';
+  if (force2D || !initGL()) c2d = canvas.getContext('2d');
+  applyHash(true);
+  resize();
+  render();
+  kick();
+})();
+</script>
+</body>
+</html>

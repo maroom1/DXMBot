@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Architecture</h1>
+    <p class="lead">How Cairn is put together: who it talks to, which processes run, how the modules depend on each other, where state lives, and the exact order in which the runtime is wired. Most of this page covers the search and crawl engine, which is the assistant's search skill. The <a href="#assistant-layer">Assistant layer</a> section covers the desktop assistant built on top of it.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#principles">Design principles</a></li>
+      <li><a href="#context">Level 1 — System context</a></li>
+      <li><a href="#containers">Level 2 — Containers</a></li>
+      <li><a href="#components">Level 3 — Components</a></li>
+      <li><a href="#catalogue">Component catalogue</a></li>
+      <li><a href="#deps">Module dependency graph</a></li>
+      <li><a href="#stores">Data stores</a></li>
+      <li><a href="#wiring">Runtime wiring order</a></li>
+      <li><a href="#process">Process model</a></li>
+      <li><a href="#deployment">Deployment &amp; local layout</a></li>
+      <li><a href="#assistant-layer">Assistant layer</a>: containers, components, process model</li>
+      <li><a href="#tree">File tree</a></li>
+    </ol></div>
+
+    <h2 id="principles">Design principles</h2>
+    <p>The architecture follows from a handful of decisions that every module respects. Each one keeps compliance in a single place, so no code path can get around it by accident.</p>
+    <div class="cards">
+      <div class="card"><h3>One fetcher, every role</h3><p>Crawls, the Fetch inspector, quick answers and the research agent all send HTTP through <code>Fetcher</code>. It is the only place that applies robots.txt, politeness, signing and audit.</p></div>
+      <div class="card"><h3>Honest identity</h3><p>Three roles (<code>CairnSearch</code>, <code>CairnCorpus</code>, <code>Cairn-User</code>) plus the family token <code>Cairn</code>. The User-Agent links to <code>/bot</code>. No UA spoofing, no IP rotation.</p></div>
+      <div class="card"><h3>Politeness is central</h3><p><code>HostScheduler</code> owns per-host delay, concurrency and backoff. The crawler never sleeps on its own, so Crawl-delay and Retry-After always apply.</p></div>
+      <div class="card"><h3>Agent via the API only</h3><p>Claude drives research through an MCP server that can only call Cairn's HTTP API. That means it goes through the same robots checks and audit as everything else.</p></div>
+      <div class="card"><h3>Everything is audited</h3><p>Every HTTP attempt, robots fetch, robots block, crawl event and agent run becomes one <code>AuditLog</code> entry. Entries go to memory, disk and live SSE.</p></div>
+      <div class="card"><h3>Local by default</h3><p>Servers bind <code>127.0.0.1</code>. A Host-header guard, an Origin (CSRF) guard and a JSON-only POST rule protect the API. There are zero npm dependencies.</p></div>
+    </div>
+    <div class="callout">Every component gets the same mutable <code>config</code> object and reads values <em>when it uses them</em>. The server rewrites <code>config.publicBaseUrl</code> after binding a port, and this is how the User-Agent and <code>Signature-Agent</code> pick up the real port.</div>
+
+    <h2 id="context">Level 1 — System context</h2>
+    <p>Cairn sits between people who ask questions and the websites that hold the answers. Site owners never talk to Cairn directly. They control it through robots.txt and page-level signals, and they can verify it through the public bot page and key directory.</p>
+
+    <div class="diagram-title">Figure 1 — System context (C4 level 1)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef person fill:#dbeafe,stroke:#3b82f6,color:#172554
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+
+  OPER(["Operator / end user<br/>asks questions, starts crawls"]):::person
+  OWNER(["Site owner<br/>decides what bots may access"]):::person
+  CAIRN["Cairn<br/>local retrieval and answer engine<br/>bound to 127.0.0.1"]:::core
+  WEBSITES["Public websites<br/>HTML pages, robots.txt, sitemaps"]:::ext
+  CLAUDECLI["Claude CLI<br/>claude -p, calls the Anthropic API"]:::ext
+
+  OPER -->|"dashboard and CLI"| CAIRN
+  CAIRN -->|"HTTP GET as CairnSearch, CairnCorpus or Cairn-User<br/>robots-checked, rate-limited, signed"| WEBSITES
+  OWNER -->|"publishes robots.txt, meta robots, X-Robots-Tag"| WEBSITES
+  OWNER -.->|"reads /bot, IP range JSON, key directory<br/>verifies Web Bot Auth signatures"| CAIRN
+  CAIRN -->|"numbered sources in, cited answer out<br/>MCP tools for deep research"| CLAUDECLI
+    </pre></div>
+    <p class="diagram-caption">Cairn has two external dependencies: the websites it reads and the Claude CLI it uses for reasoning. Site owners stay in control through standard signals and never need an account or API key.</p>
+
+    <h2 id="containers">Level 2 — Containers</h2>
+    <p>A container here is a separately running or separately deployed unit. Everything runs on one machine. The only network traffic leaving it is outbound fetches to websites and the Claude CLI's own connection to Anthropic.</p>
+
+    <div class="diagram-title">Figure 2 — Containers (C4 level 2)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef person fill:#dbeafe,stroke:#3b82f6,color:#172554
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  OPER(["Operator"]):::person
+  subgraph HOSTBOX["Local machine, loopback only"]
+    BROWSER["Web dashboard<br/>web/index.html, app.js, styles.css<br/>runs in the browser"]:::proc
+    CLIBOX["CLI<br/>bin/cairn.js<br/>embeds the runtime in-process"]:::core
+    subgraph NODEPROC["Node process: cairn serve"]
+      SERVER["HTTP server, JSON API, SSE<br/>src/server/*<br/>also serves /docs, /bot, /.well-known"]:::core
+      AGENTS["Agent orchestration<br/>src/agent/answer.js, research.js, claude.js"]:::core
+      RUNTIME["Runtime<br/>src/runtime.js<br/>fetcher, robots, scheduler, signer, index, jobs, audit"]:::core
+    end
+    CLAUDEP["Claude CLI process<br/>claude -p --output-format stream-json"]:::proc
+    MCPP["MCP server process<br/>node src/agent/mcp-server.js"]:::proc
+    DATA[("Data directory<br/>index.json, audit.ndjson, keys/<br/>corpus/, config.json, agent-work/")]:::store
+  end
+  WEBSITES["Websites"]:::ext
+  ANTHROPIC["Anthropic API"]:::ext
+
+  OPER --> BROWSER
+  OPER --> CLIBOX
+  BROWSER -->|"fetch JSON and EventSource"| SERVER
+  CLIBOX -->|"createRuntime() and, for serve or ask --deep, startServer()"| RUNTIME
+  SERVER --> RUNTIME
+  SERVER --> AGENTS
+  AGENTS --> RUNTIME
+  RUNTIME -->|"read and write"| DATA
+  AGENTS -->|"spawn, prompt on stdin"| CLAUDEP
+  CLAUDEP -->|"spawn, JSON-RPC over stdio"| MCPP
+  MCPP -->|"HTTP /api/* via CAIRN_API"| SERVER
+  CLAUDEP -->|"HTTPS"| ANTHROPIC
+  RUNTIME -->|"HTTP GET, robots-checked, signed"| WEBSITES
+    </pre></div>
+    <p class="diagram-caption">The MCP server process holds no state and has no network access of its own. It turns tool calls into requests to Cairn's HTTP API, so whatever the research agent fetches is still checked, rate-limited and audited by the runtime.</p>
+
+    <div class="table-scroll"><table>
+      <thead><tr><th>Container</th><th>Technology</th><th>Responsibility</th><th>Talks to</th></tr></thead>
+      <tbody>
+        <tr><td>CLI</td><td>Node ESM, <code>bin/cairn.js</code></td><td>All commands (<code>serve</code>, <code>crawl</code>, <code>ask</code>, <code>fetch</code>, <code>robots</code>, <code>demo</code>, …). It builds the runtime in-process. <code>ask --deep</code> starts an in-process server on port 0 for the MCP bridge.</td><td>Runtime, server, fixture site</td></tr>
+        <tr><td>HTTP server / API</td><td><code>node:http</code>, <code>src/server/*</code></td><td>JSON API, SSE streams, static dashboard and docs, <code>/bot</code> page, IP range JSON, key directory. Applies the Host (421) and Origin (403) guards.</td><td>Runtime, agent modules</td></tr>
+        <tr><td>Web dashboard</td><td>Vanilla JS module, no framework</td><td>Views for Ask, Crawl, Index, Fetch inspector, Robots tester, Audit, Identity and Settings. It uses <code>/api/*</code> and <code>EventSource</code> only.</td><td>HTTP API</td></tr>
+        <tr><td>Runtime</td><td>In-process object graph</td><td>Shared <code>config</code>, <code>audit</code>, <code>signer</code>, <code>scheduler</code>, <code>fetcher</code>, <code>robots</code>, <code>index</code>, <code>jobs</code>.</td><td>Websites, data directory</td></tr>
+        <tr><td>Claude CLI process</td><td><code>claude -p</code> (external binary)</td><td>LLM reasoning for quick answers (no tools) and deep research (Cairn MCP tools only).</td><td>Anthropic API, MCP server</td></tr>
+        <tr><td>MCP server process</td><td><code>node src/agent/mcp-server.js</code>, JSON-RPC 2.0 over stdio</td><td>Five tools: <code>search_index</code>, <code>fetch_page</code>, <code>crawl_site</code>, <code>check_robots</code>, <code>index_stats</code>. Writes the source registry to <code>CAIRN_SOURCES_FILE</code>.</td><td>HTTP API (<code>CAIRN_API</code>)</td></tr>
+        <tr><td>Data directory</td><td>Plain files</td><td>Persistent state. See <a href="#stores">Data stores</a>.</td><td>Runtime</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="components">Level 3 — Components</h2>
+    <p>Inside the Node process, components fall into layers. Arrows show runtime calls (who invokes whom), not imports. Imports are shown in the <a href="#deps">dependency graph</a>. The view is split in two. Figure 3 shows the application layer, and Figure 4 zooms into the compliance core that every outbound request goes through.</p>
+
+    <div class="diagram-title">Figure 3 — Components: application layer (C4 level 3)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef hub fill:#dbeafe,stroke:#3b82f6,color:#172554
+
+  subgraph IFACE["Interfaces"]
+    CLIC["bin/cairn.js<br/>CLI"]:::core
+    APP["server/app.js<br/>routing, guards, static"]:::core
+    BOT["server/botpage.js<br/>/bot page"]:::core
+    API["server/api.js<br/>/api/* routes"]:::core
+    SSE["server/sse.js<br/>SSE streams"]:::core
+  end
+  subgraph AGENTL["Agent"]
+    ANSWER["agent/answer.js<br/>quick answer"]:::core
+    RESEARCH["agent/research.js<br/>deep research"]:::core
+    CLAUDEJS["agent/claude.js<br/>runs claude -p"]:::core
+  end
+  subgraph CRAWLL["Crawl"]
+    JOBS["crawl/jobs.js<br/>JobManager"]:::core
+    CRAWLER["crawl/crawler.js<br/>CrawlJob"]:::core
+    CORPUS["crawl/corpus.js<br/>JSONL writer"]:::core
+  end
+  subgraph TEXTL["Text and index"]
+    HTMLX["extract/html.js"]:::core
+    SITEMAP["extract/sitemap.js"]:::core
+    STORE["index/store.js<br/>SearchIndex"]:::core
+  end
+  CORE["Compliance core<br/>Fetcher, RobotsCache, HostScheduler,<br/>Signer, AuditLog (Figure 4)"]:::hub
+  CLAUDEX["claude -p"]:::ext
+  MCPS["agent/mcp-server.js<br/>separate process"]:::proc
+  IDXFILE[("index.json")]:::store
+  CORPFILES[("corpus/*.jsonl")]:::store
+
+  CLIC --> APP
+  CLIC --> JOBS
+  CLIC --> ANSWER
+  APP --> API
+  APP --> BOT
+  API --> SSE
+  API --> JOBS
+  API --> ANSWER
+  API --> RESEARCH
+  API --> STORE
+  API -->|"/api/fetch, robots, keys"| CORE
+  ANSWER --> STORE
+  ANSWER --> CLAUDEJS
+  RESEARCH --> CLAUDEJS
+  CLAUDEJS -.->|spawn| CLAUDEX
+  CLAUDEX -.->|spawn| MCPS
+  MCPS -.->|"HTTP"| API
+  JOBS --> CRAWLER
+  CRAWLER -->|"fetch, checkRobots"| CORE
+  CRAWLER --> HTMLX
+  CRAWLER --> SITEMAP
+  CRAWLER --> STORE
+  CRAWLER --> CORPUS
+  STORE --> IDXFILE
+  CORPUS --> CORPFILES
+    </pre></div>
+    <p class="diagram-caption">Two entry points (CLI and HTTP API) drive two engines (crawl and agent). Both engines read and write the search index. Neither touches the network directly: every outbound request goes through the compliance core.</p>
+
+    <div class="diagram-title">Figure 4 — Components: compliance core and foundation</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef hub fill:#dbeafe,stroke:#3b82f6,color:#172554
+
+  CALLERS["Callers<br/>CrawlJob, /api/fetch,<br/>/api/robots/check, MCP via API"]:::hub
+  subgraph NETL["Compliance core: src/net, src/robots"]
+    FETCHER["net/fetcher.js<br/>Fetcher"]:::core
+    RCACHE["robots/cache.js<br/>RobotsCache<br/>loads robots.txt via fetchRaw"]:::core
+    RPARSER["robots/parser.js<br/>parseRobots, RobotsTxt"]:::core
+    SCHED["net/ratelimit.js<br/>HostScheduler"]:::core
+    SIGNER["net/signing.js<br/>Signer"]:::core
+  end
+  subgraph FOUNDL["Foundation"]
+    IDENT["identity.js<br/>tokens, User-Agent"]:::core
+    URLU["util/url.js<br/>normalizeUrl, origins"]:::core
+    AUDIT["util/audit.js<br/>AuditLog"]:::core
+    CONFIG["config.js<br/>read at use time"]:::core
+  end
+  WEBSITES["Websites"]:::ext
+  KEYS[("keys/")]:::store
+  AUDFILE[("audit.ndjson")]:::store
+
+  CALLERS --> FETCHER
+  FETCHER -->|"check(url, role)"| RCACHE
+  RCACHE --> RPARSER
+  FETCHER -->|"schedule, penalize, reward"| SCHED
+  FETCHER -->|"signRequest"| SIGNER
+  FETCHER -->|"record"| AUDIT
+  FETCHER --> IDENT
+  FETCHER --> URLU
+  FETCHER --> CONFIG
+  FETCHER -->|"HTTP GET"| WEBSITES
+  SIGNER --> KEYS
+  AUDIT --> AUDFILE
+    </pre></div>
+    <p class="diagram-caption">Every path that reaches a website goes through <code>Fetcher</code>. The robots cache fetches robots.txt through the fetcher's own <code>fetchRaw</code>, so robots.txt requests are also rate-limited, signed and audited. <code>AuditLog</code> also feeds <code>/api/audit/stream</code> through <code>subscribe()</code>.</p>
+
+    <h2 id="catalogue">Component catalogue</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Component</th><th>File</th><th>Key interface</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Config</td><td><code>src/config.js</code></td><td><code>loadConfig</code>, <code>saveConfig</code>, <code>EDITABLE_KEYS</code></td><td>Defaults, then <code>data/config.json</code>, then overrides. Environment variables feed the defaults.</td></tr>
+        <tr><td>Identity</td><td><code>src/identity.js</code></td><td><code>ROLES</code>, <code>userAgent(role, base)</code>, <code>robotsTokens(role)</code></td><td><code>robotsTokens</code> returns <code>[roleToken, 'Cairn']</code>.</td></tr>
+        <tr><td>Audit</td><td><code>src/util/audit.js</code></td><td><code>record</code>, <code>recent</code>, <code>stats</code>, <code>subscribe</code></td><td>Ring buffer of 2000 entries in memory, plus an NDJSON file.</td></tr>
+        <tr><td>Signer</td><td><code>src/net/signing.js</code></td><td><code>init</code>, <code>keyId</code>, <code>jwks()</code>, <code>signRequest</code>, <code>verifyRequest</code></td><td>Ed25519, RFC 9421, Web Bot Auth <code>tag="web-bot-auth"</code>.</td></tr>
+        <tr><td>Scheduler</td><td><code>src/net/ratelimit.js</code></td><td><code>schedule</code>, <code>penalize</code>, <code>reward</code>, <code>stats</code></td><td>FIFO per host. It never holds a global slot while waiting on a host delay.</td></tr>
+        <tr><td>Robots parser</td><td><code>src/robots/parser.js</code></td><td><code>parseRobots</code>, <code>RobotsTxt.isAllowed</code></td><td>RFC 9309: longest match wins, allow wins ties, supports <code>*</code> and <code>$</code>. Parsing stops at 500 KiB.</td></tr>
+        <tr><td>Robots cache</td><td><code>src/robots/cache.js</code></td><td><code>get</code>, <code>check</code>, <code>invalidate</code>, <code>entries</code></td><td>Keyed by origin. Concurrent lookups share one fetch. Stale copies and failures are handled as described in <a href="workflows.html#f4">Figure 4 of the workflows page</a>.</td></tr>
+        <tr><td>Fetcher</td><td><code>src/net/fetcher.js</code></td><td><code>fetch</code>, <code>fetchRaw</code>, <code>checkRobots</code></td><td>The one compliant pipeline: robots check, schedule, sign, GET, redirects, retries, audit.</td></tr>
+        <tr><td>Extract</td><td><code>src/extract/html.js</code>, <code>sitemap.js</code></td><td><code>extractHtml</code>, <code>extractText</code>, <code>parseSitemap</code></td><td>Tolerant tokenizer. Merges meta robots for the role's bot tokens.</td></tr>
+        <tr><td>Index</td><td><code>src/index/store.js</code>, <code>tokenize.js</code></td><td><code>add</code>, <code>search</code>, <code>searchPassages</code>, <code>save</code></td><td>BM25 (k1 1.2, b 0.75), title weight ×2.5, passages of about 120 words.</td></tr>
+        <tr><td>Crawl</td><td><code>src/crawl/crawler.js</code>, <code>jobs.js</code>, <code>corpus.js</code></td><td><code>CrawlJob.run</code>, <code>JobManager.create</code></td><td>BFS with sitemap seeding. Keeps the last 50 jobs.</td></tr>
+        <tr><td>Agent</td><td><code>src/agent/*.js</code></td><td><code>answerQuestion</code>, <code>deepResearch</code>, <code>runClaude</code></td><td>Quick mode runs Claude with no tools. Deep mode runs Claude with only the Cairn MCP tools.</td></tr>
+        <tr><td>Server</td><td><code>src/server/*.js</code></td><td><code>startServer({runtime, port, host})</code></td><td>Binds <code>127.0.0.1</code>. After listening it rewrites <code>config.publicBaseUrl</code>, unless the URL was set explicitly.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="deps">Module dependency graph</h2>
+    <p>Solid arrows are static ES module imports, taken from the source. Dashed arrows are either lazy <code>await import()</code> calls (the CLI loads each command's modules on demand, and the fixture site loads the verifier only when needed) or not imports at all (a process spawn or an HTTP call). The graph has no cycles. Foundation modules import nothing from Cairn, and the network layer never imports crawl, agent or server code.</p>
+
+    <div class="diagram-title">Figure 5 — Module dependency graph (import direction)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef found fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+
+  BIN["bin/cairn.js"]:::core
+  FIXT["fixtures/site-server.js"]:::core
+  SAPP["server/app.js"]:::core
+  SAPI["server/api.js"]:::core
+  SSSE["server/sse.js"]:::core
+  SBOT["server/botpage.js"]:::core
+  AANS["agent/answer.js"]:::core
+  ARES["agent/research.js"]:::core
+  ACLA["agent/claude.js"]:::core
+  AMCP["agent/mcp-server.js"]:::proc
+  RTM["runtime.js"]:::core
+  CJOBS["crawl/jobs.js"]:::core
+  CCRAWL["crawl/crawler.js"]:::core
+  CCORP["crawl/corpus.js"]:::core
+  XHTML["extract/html.js"]:::core
+  XSMAP["extract/sitemap.js"]:::core
+  ISTORE["index/store.js"]:::core
+  ITOK["index/tokenize.js"]:::core
+  NFETCH["net/fetcher.js"]:::core
+  NRATE["net/ratelimit.js"]:::core
+  NSIGN["net/signing.js"]:::core
+  RCACHE["robots/cache.js"]:::core
+  RPARSE["robots/parser.js"]:::core
+  CFG["config.js"]:::found
+  IDN["identity.js"]:::found
+  URLM["util/url.js"]:::found
+  AUDM["util/audit.js"]:::found
+
+  BIN -.->|"lazy import"| RTM
+  BIN -.-> SAPP
+  BIN -.-> SAPI
+  BIN -.-> AANS
+  BIN -.-> ACLA
+  BIN -.-> FIXT
+  BIN -.-> CFG
+  BIN -.-> IDN
+  FIXT -.->|"lazy import"| NSIGN
+  SAPP --> SAPI
+  SAPP --> SBOT
+  SAPP --> CFG
+  SAPP --> IDN
+  SAPI --> SSSE
+  SAPI --> AANS
+  SAPI --> ARES
+  SAPI --> ACLA
+  SAPI --> RPARSE
+  SAPI --> NSIGN
+  SAPI --> XHTML
+  SAPI --> CFG
+  SAPI --> IDN
+  SAPI --> URLM
+  SBOT --> IDN
+  AANS --> ACLA
+  ARES --> ACLA
+  ARES --> AANS
+  ARES -.->|"spawned by path"| AMCP
+  AMCP --> URLM
+  AMCP -.->|"HTTP only"| SAPI
+  RTM --> CFG
+  RTM --> AUDM
+  RTM --> NSIGN
+  RTM --> NRATE
+  RTM --> NFETCH
+  RTM --> ISTORE
+  RTM --> CJOBS
+  CJOBS --> CCRAWL
+  CCRAWL --> XHTML
+  CCRAWL --> XSMAP
+  CCRAWL --> CCORP
+  CCRAWL --> IDN
+  CCRAWL --> URLM
+  ISTORE --> ITOK
+  ISTORE --> URLM
+  NFETCH --> RCACHE
+  NFETCH --> NRATE
+  NFETCH --> IDN
+  NFETCH --> URLM
+  RCACHE --> RPARSE
+  RCACHE --> IDN
+  RCACHE --> URLM
+  XSMAP --> XHTML
+  XSMAP --> URLM
+  XHTML --> URLM
+    </pre></div>
+    <p class="diagram-caption">The <code>Fetcher</code> gets its <code>scheduler</code>, <code>signer</code> and <code>audit</code> through its constructor instead of importing them. That dependency injection lets tests pass in fakes, including a fake <code>fetchImpl</code>. The CLI reuses request helpers exported by <code>server/api.js</code>, so CLI and HTTP behave the same way. The MCP server imports only the pure <code>util/url.js</code> helper and never touches the runtime.</p>
+
+    <h2 id="stores">Data stores</h2>
+    <p>All persistent state is kept under one data directory. It defaults to <code>./data</code> in the project and can be changed with <code>CAIRN_HOME</code> or <code>--data-dir</code>. The directory is git-ignored, and deleting it resets Cairn completely.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Path</th><th>Format</th><th>Written by</th><th>Read by</th><th>Lifecycle</th></tr></thead>
+      <tbody>
+        <tr><td><code>data/index.json</code></td><td>JSON, documents only</td><td><code>SearchIndex.save()</code>, debounced by <code>scheduleSave(1000)</code></td><td><code>SearchIndex.load()</code> at startup</td><td>Atomic write to a temp file, then rename. Postings and passages are rebuilt on load, so the file stays small and consistent.</td></tr>
+        <tr><td><code>data/audit.ndjson</code></td><td>Newline-delimited JSON, one entry per line</td><td><code>AuditLog.record()</code></td><td>Operators and external tools. The dashboard uses the in-memory ring buffer instead.</td><td>Append-only. Nothing rotates it automatically.</td></tr>
+        <tr><td><code>data/keys/ed25519-private.pem</code><br><code>data/keys/ed25519-public.pem</code></td><td>PEM (PKCS#8 / SPKI)</td><td><code>Signer.init()</code> on first run</td><td><code>Signer</code>, which publishes the key as a JWKS at <code>/.well-known/http-message-signatures-directory</code></td><td>The private key is created with mode <code>0600</code>. The keyid is the RFC 7638 thumbprint. Deleting the files rotates the key.</td></tr>
+        <tr><td><code>data/corpus/&lt;jobId&gt;.jsonl</code></td><td>JSONL <code>{url, title, text, fetchedAt, contentHash}</code></td><td><code>crawl/corpus.js</code>, for corpus-role jobs only</td><td>Offline dataset and evaluation tooling</td><td>One file per job. Never loaded into the search index.</td></tr>
+        <tr><td><code>data/config.json</code></td><td>JSON, editable subset only</td><td><code>saveConfig()</code> via <code>POST /api/config</code></td><td><code>loadConfig()</code></td><td>Only <code>EDITABLE_KEYS</code> are stored (politeness, robots, crawl, agent, signing, fetch, contact). A corrupt file is ignored.</td></tr>
+        <tr><td><code>data/agent-work/</code></td><td>Empty directory</td><td><code>agent/claude.js</code> (creates it)</td><td>The <code>claude -p</code> working directory</td><td>Kept empty so the Claude CLI does not load project files such as <code>CLAUDE.md</code>. MCP config and source-registry files are temporary files.</td></tr>
+        <tr><td><code>data/conversations/&lt;id&gt;.json</code></td><td>JSON, one conversation</td><td><code>ConversationStore</code> (assistant)</td><td>The chat panel's History tab, <code>AssistantAgent</code> for <code>--resume</code></td><td>Atomic writes. Holds messages, the Claude session id and <code>allowAlways</code>. Deleted with <code>DELETE /api/assistant/conversations/:id</code>.</td></tr>
+        <tr><td><code>data/runs.json</code></td><td>JSON, compact run log</td><td><code>AssistantAgent</code></td><td>The Activity tab after a restart</td><td>Last 50 runs. Runs still in flight at shutdown become <code>error: interrupted</code>.</td></tr>
+        <tr><td><code>data/tasks.json</code></td><td>JSON, reminders and recurring tasks</td><td><code>TaskScheduler</code></td><td><code>TaskScheduler</code> at startup</td><td>Written atomically on every change. The last 20 runs of each task are kept.</td></tr>
+        <tr><td><code>data/shopping.json</code></td><td>JSON list</td><td><code>ShoppingList</code></td><td>The Shopping tab and the <code>shopping_list</code> tool</td><td>Items stay until you remove them.</td></tr>
+        <tr><td><code>data/assistant-settings.json</code></td><td>JSON</td><td><code>POST /api/assistant/settings</code></td><td><code>createAssistant()</code></td><td>Model, budget, workDir, browser, notification and concurrency settings.</td></tr>
+        <tr><td><code>data/server.log</code></td><td>Text</td><td>The server child started by <code>Cairn.app</code></td><td>You, when the bubble shows offline</td><td>Appended to on each launch by the app.</td></tr>
+      </tbody>
+    </table></div>
+    <p>State that lives only in memory, per process: the robots cache (per origin), the scheduler's host table, the crawl job list (last 50 jobs), the audit ring buffer (2000 entries), and the MCP session's source registry.</p>
+
+    <h2 id="wiring">Runtime wiring order</h2>
+    <p><code>createRuntime(overrides)</code> in <code>src/runtime.js</code> builds the object graph in dependency order. Each step only uses objects built in earlier steps. The CLI, the server and the tests all call it.</p>
+
+    <div class="diagram-title">Figure 6 — createRuntime() wiring order and shutdown</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  W1["1\. loadConfig(overrides)<br/>defaults, then data/config.json, then overrides"]:::core
+  W2["2\. mkdir dataDir"]:::core
+  W3["3\. new AuditLog({file: audit.ndjson})"]:::core
+  W4["4\. new Signer({keyDir: keys, config})<br/>await signer.init()"]:::core
+  W5["5\. new HostScheduler(config.politeness)"]:::core
+  W6["6\. new Fetcher({config, scheduler, signer, audit})<br/>creates RobotsCache internally"]:::core
+  W7["7\. new SearchIndex({file: index.json})<br/>await index.load()"]:::core
+  W8["8\. new JobManager({config, fetcher, index, audit})"]:::core
+  W9(["9\. return runtime<br/>config, audit, signer, scheduler, fetcher,<br/>robots = fetcher.robots, index, jobs, startedAt, close()"])
+  W10["startServer({runtime, port})<br/>binds 127.0.0.1, rewrites config.publicBaseUrl"]:::core
+  CL1["close(): jobs.cancelAll()"]:::core
+  CL2["await index.save()"]:::core
+  CL3["await audit.close()"]:::core
+  KEYS[("keys/")]:::store
+  IDX[("index.json")]:::store
+
+  W1 --> W2 --> W3 --> W4 --> W5 --> W6 --> W7 --> W8 --> W9
+  W9 -->|"serve, API tests, ask --deep"| W10
+  W9 -.->|"on shutdown"| CL1 --> CL2 --> CL3
+  W4 --- KEYS
+  W7 --- IDX
+    </pre></div>
+    <p class="diagram-caption">The robots cache is not a separate step. The <code>Fetcher</code> constructor creates it with <code>fetchRobots = (url, role) =&gt; this.fetchRaw(url, {role, kind: 'robots'})</code>, and the runtime exposes it as <code>runtime.robots</code>. Shutdown cancels jobs first, so no new pages are added while the index is being saved.</p>
+    <ol>
+      <li>Config is resolved first. Everything below holds a reference to the same object.</li>
+      <li>The audit log comes before the signer and the fetcher, so the very first network action can be recorded.</li>
+      <li>The signer loads or creates its key pair before any request is signed.</li>
+      <li>The index is loaded from disk before the job manager starts, so duplicate detection sees existing documents.</li>
+      <li>The server is optional. When it binds to port 0, the real port reaches the User-Agent and <code>Signature-Agent</code> through <code>config.publicBaseUrl</code>.</li>
+    </ol>
+
+    <h2 id="process">Process model</h2>
+    <p>Quick answers need one child process. Deep research needs two, plus a loopback HTTP hop back into the parent. Each boundary uses a simple, inspectable transport.</p>
+
+    <div class="diagram-title">Figure 7 — Process model for deep research</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+
+  subgraph PA["Process A: node bin/cairn.js serve"]
+    HTTPA["HTTP API<br/>127.0.0.1:8787"]:::core
+    RSJ["research.js and claude.js"]:::core
+    RTA["Runtime: Fetcher, index, jobs"]:::core
+  end
+  subgraph PB["Process B: claude -p"]
+    LOOP["Claude agent loop<br/>--tools '' --strict-mcp-config<br/>--allowedTools mcp__cairn__*"]:::proc
+  end
+  subgraph PC["Process C: node src/agent/mcp-server.js"]
+    TOOLS["MCP stdio server<br/>search_index, fetch_page, crawl_site,<br/>check_robots, index_stats"]:::proc
+  end
+  ANTHROPIC["Anthropic API"]:::ext
+  WEBSITES["Websites"]:::ext
+
+  RSJ -->|"spawn, prompt via stdin"| LOOP
+  LOOP -->|"stream-json NDJSON on stdout"| RSJ
+  LOOP -->|"spawn from --mcp-config<br/>JSON-RPC 2.0 over stdin and stdout"| TOOLS
+  TOOLS -->|"HTTP to CAIRN_API"| HTTPA
+  HTTPA --> RTA
+  RSJ --> RTA
+  LOOP -->|"HTTPS"| ANTHROPIC
+  RTA -->|"HTTP GET as Cairn-User"| WEBSITES
+    </pre></div>
+    <p class="diagram-caption">The MCP server writes only protocol messages to stdout and sends its logs to stderr. It shares one file with the parent, <code>CAIRN_SOURCES_FILE</code>, which holds the <code>[{n, url, title}]</code> registry. <code>research.js</code> reads that file after the run to build the citation list.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Boundary</th><th>Transport</th><th>Framing</th><th>Timeout and limits</th></tr></thead>
+      <tbody>
+        <tr><td>Process A to Process B</td><td>stdin (prompt), stdout (events)</td><td><code>--output-format stream-json --verbose</code>, one JSON object per line</td><td><code>config.agent.timeoutMs</code> (240 s default) and <code>--max-budget-usd</code>. The child is killed on timeout or abort.</td></tr>
+        <tr><td>Process B to Process C</td><td>stdio</td><td>JSON-RPC 2.0, newline-delimited: <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code></td><td>Tool results are text. <code>crawl_site</code> polls for up to 90 s.</td></tr>
+        <tr><td>Process C to Process A</td><td>HTTP on loopback</td><td>JSON, <code>Content-Type: application/json</code></td><td>Same Host and Origin guards as the dashboard.</td></tr>
+        <tr><td>Process A to websites</td><td>HTTP(S)</td><td>GET with UA, <code>From</code> and Web Bot Auth headers</td><td><code>fetch.timeoutMs</code> 15 s, <code>maxBytes</code> 5 MiB, at most 5 redirects, 2 retries.</td></tr>
+      </tbody>
+    </table></div>
+    <p><code>cairn ask --deep</code> on the command line starts the same arrangement. The CLI starts an in-process server on port 0 so the MCP server has an API to call.</p>
+
+    <h2 id="deployment">Deployment &amp; local layout</h2>
+    <p>Cairn is a single-machine tool. There is nothing to install beyond Node 20+, plus a logged-in <code>claude</code> CLI if you want LLM answers.</p>
+
+    <div class="diagram-title">Figure 8 — Local deployment</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  subgraph MACHINE["Developer machine: macOS, Node 20+"]
+    TERM["Terminal<br/>node bin/cairn.js ..."]:::proc
+    BROWSER["Browser<br/>http\://127.0.0.1:8787/"]:::proc
+    subgraph LOOPBACK["Loopback 127.0.0.1"]
+      SRV["cairn serve on :8787 (CAIRN_PORT)<br/>/ dashboard, /api, /docs, /bot, /.well-known"]:::core
+      FIX["cairn fixture on :8788<br/>Northwind Trails demo site, optional"]:::core
+    end
+    CLAUDEBIN["claude CLI<br/>CAIRN_CLAUDE_BIN"]:::proc
+    DATADIR[("data dir<br/>./data or CAIRN_HOME")]:::store
+  end
+  INTERNET["Public websites"]:::ext
+  ANTHROPIC["Anthropic API"]:::ext
+
+  TERM -->|"starts"| SRV
+  TERM -->|"starts"| FIX
+  BROWSER --> SRV
+  SRV --> DATADIR
+  SRV -->|"crawl the demo site"| FIX
+  SRV -->|"outbound HTTP(S) as Cairn roles"| INTERNET
+  SRV -.->|"spawn"| CLAUDEBIN
+  CLAUDEBIN -->|"HTTPS"| ANTHROPIC
+    </pre></div>
+    <p class="diagram-caption">Nothing listens on a public interface. When Cairn runs behind a real hostname, set <code>CAIRN_PUBLIC_URL</code>. The User-Agent's <code>+…/bot</code> link and the <code>Signature-Agent</code> key directory will then point at a URL site owners can reach.</p>
+
+    <div class="table-scroll"><table>
+      <thead><tr><th>Environment variable</th><th>Default</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>CAIRN_PORT</code></td><td><code>8787</code></td><td>Server port. It also shapes the default <code>publicBaseUrl</code>.</td></tr>
+        <tr><td><code>CAIRN_HOST</code></td><td><code>127.0.0.1</code></td><td>Bind address.</td></tr>
+        <tr><td><code>CAIRN_PUBLIC_URL</code></td><td>unset, so <code>http://127.0.0.1:&lt;port&gt;</code> is used</td><td>Explicit public base URL. The server then leaves it unchanged after binding.</td></tr>
+        <tr><td><code>CAIRN_CONTACT</code></td><td><code>cairn-operator@localhost</code></td><td>Sent in the <code>From</code> header and shown on <code>/bot</code>.</td></tr>
+        <tr><td><code>CAIRN_HOME</code></td><td><code>&lt;project&gt;/data</code></td><td>Data directory.</td></tr>
+        <tr><td><code>CAIRN_CLAUDE_BIN</code></td><td><code>claude</code></td><td>Claude CLI binary. Tests point it at <code>test/fixtures/fake-claude.js</code>.</td></tr>
+        <tr><td><code>CAIRN_MODEL</code></td><td><code>sonnet</code></td><td>Default model for answers and research.</td></tr>
+        <tr><td><code>CAIRN_LIVE_CLAUDE</code></td><td>unset</td><td>Set to <code>1</code> to run the live Claude test suite.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="assistant-layer">Assistant layer</h2>
+    <p>The desktop assistant sits on top of the engine. It adds a native app (<code>desktop/</code>), a compact web UI (<code>web/bubble.*</code> and <code>web/avatars/*</code>), and the <code>src/assistant/</code> modules, which run inside the same <code>cairn serve</code> process. <code>src/server/api.js</code> hands every <code>/api/assistant/*</code> request to <code>handleAssistantApi()</code> in <code>routes.js</code>, and the assistant is created once per runtime (<code>assistantFor(runtime)</code>) so the scheduler starts with the server. The engine becomes one of the assistant's skills: the <code>cairn</code> MCP server gives Claude its search, fetch and robots tools. The user-facing view is on <a href="assistant.html">Desktop assistant</a> and <a href="desktop.html">Floating bubble app</a>.</p>
+
+    <h3 id="assistant-containers">Containers</h3>
+    <div class="diagram-title">Figure 9 — Assistant containers (C4 level 2)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef person fill:#dbeafe,stroke:#3b82f6,color:#172554
+  classDef native fill:#fce7f3,stroke:#db2777,color:#500724
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  USER(["You"]):::person
+  subgraph MAC["Your Mac, loopback only"]
+    APP["Cairn.app<br/>desktop/CairnBubble.swift<br/>NSPanel bubble + chat panel"]:::native
+    AV["Avatar page<br/>web/avatars/avatar-*.html<br/>transparent WKWebView"]:::native
+    UI["Chat panel UI<br/>web/bubble.html, bubble.js, bubble.css"]:::native
+    subgraph NODE["Node process: node bin/cairn.js serve"]
+      API["HTTP server<br/>src/server/*<br/>delegates /api/assistant/*"]:::core
+      ASSIST["Assistant<br/>src/assistant/*<br/>agent, approvals, scheduler,<br/>conversations, shopping, macos"]:::core
+      ENG["Engine runtime<br/>index, fetcher, robots, audit"]:::core
+    end
+    CL["claude -p<br/>one process per run"]:::proc
+    MT["node src/assistant/mcp-tools.js<br/>MCP server: assistant"]:::proc
+    MS["node src/agent/mcp-server.js<br/>MCP server: cairn"]:::proc
+    PW["npx -y @playwright/mcp@latest<br/>MCP server: playwright"]:::proc
+    OSA["osascript, open, pbcopy, pbpaste"]:::proc
+    DD[("dataDir<br/>conversations/, runs.json, tasks.json,<br/>shopping.json, assistant-settings.json")]:::store
+  end
+  ANTH["Anthropic API"]:::ext
+  WEB["Websites"]:::ext
+
+  USER --> APP
+  APP -->|"loads"| AV
+  APP -->|"loads"| UI
+  APP -->|"GET /api/assistant/health every 3 s"| API
+  UI -->|"fetch JSON + EventSource"| API
+  API --> ASSIST
+  API --> ENG
+  ASSIST -->|"spawn, prompt on stdin"| CL
+  CL -->|"stdio"| MT
+  CL -->|"stdio"| MS
+  CL -->|"stdio, if allowBrowser"| PW
+  MT -->|"HTTP CAIRN_API"| API
+  MS -->|"HTTP CAIRN_API"| API
+  ASSIST -->|"execFile, never a shell"| OSA
+  ASSIST --> DD
+  CL -->|"HTTPS"| ANTH
+  ENG -->|"robots-checked, signed"| WEB
+  PW -->|"visible browser"| WEB
+    </pre></div>
+    <p class="diagram-caption">Only the Node process holds assistant state. The native app, the web UI and the two Node MCP servers are thin clients of the loopback API, so the same Host, Origin and JSON guards apply to all of them. The Playwright server is the one tool process that reaches the web without going through the engine's fetcher. That is why its interactive tools need approval.</p>
+
+    <h3 id="assistant-components">Components</h3>
+    <div class="diagram-title">Figure 10 — Components of src/assistant/ and desktop/</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef native fill:#fce7f3,stroke:#db2777,color:#500724
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  subgraph DESK["desktop/CairnBubble.swift"]
+    SL["Server launcher<br/>health check, spawn child,<br/>watchdog after 3 failed polls"]:::native
+    BW["Bubble window<br/>avatar WKWebView + drag/click overlay<br/>state from health"]:::native
+    CP["Chat panel<br/>WKWebView, cairn message handler"]:::native
+    MENU["Right-click menu<br/>Avatar submenu, Start at Login, Quit"]:::native
+  end
+  subgraph RTS["src/assistant/routes.js"]
+    H["createAssistant()<br/>handle(req, res, url)"]:::core
+    BUS["Event bus<br/>global SSE /api/assistant/events"]:::core
+    NOTE["notify()<br/>macOS notifications"]:::core
+    SET["Settings<br/>assistant-settings.json"]:::core
+  end
+  AG["AssistantAgent<br/>agent.js<br/>run pool, queue, stream-json parser"]:::core
+  AQ["ApprovalQueue<br/>approvals.js"]:::core
+  TS["TaskScheduler<br/>scheduler.js"]:::core
+  WH["parseWhen, nextOccurrence<br/>when.js"]:::core
+  CS["ConversationStore<br/>conversations.js"]:::core
+  SH["ShoppingList<br/>shopping.js"]:::core
+  MO["macos.js<br/>notify, addReminder,<br/>addCalendarEvent, openUrl,<br/>openApp, clipboard"]:::core
+  MT["mcp-tools.js<br/>16 tools incl. approval_prompt"]:::proc
+  DD[("dataDir files")]:::store
+
+  SL -->|"GET /api/health"| H
+  BW -->|"GET /api/assistant/health"| H
+  CP -->|"/web/bubble.html"| H
+  MENU --> BW
+  H --> AG
+  H --> AQ
+  H --> TS
+  H --> SH
+  H --> SET
+  H --> MO
+  H --> BUS
+  TS -->|"due: reminder"| NOTE
+  TS -->|"due: agent task, runOnce"| AG
+  TS --> WH
+  AG --> CS
+  AG -->|"waiting_approval"| AQ
+  AQ -->|"request, resolved"| BUS
+  AG -->|"run_started, run_update, run_done"| BUS
+  NOTE --> MO
+  MT -->|"POST /api/assistant/approvals<br/>GET .../wait"| H
+  CS --> DD
+  AG --> DD
+  TS --> DD
+  SH --> DD
+  SET --> DD
+    </pre></div>
+    <p class="diagram-caption"><code>routes.js</code> is the only module that knows about HTTP. The agent, queue, scheduler and stores are plain classes that emit events, and the route layer turns those events into SSE messages and notifications. <code>mcp-tools.js</code> runs in its own process and reaches all of this only over HTTP.</p>
+
+    <div class="table-scroll"><table>
+      <thead><tr><th>Component</th><th>File</th><th>Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td>Assistant facade and routes</td><td><code>src/assistant/routes.js</code></td><td><code>createAssistant({runtime})</code>, <code>assistantFor(runtime)</code>, <code>handleAssistantApi(ctx)</code>. All <code>/api/assistant/*</code> routes, global and per-run SSE (15 s heartbeat), notifications, settings, health.</td></tr>
+        <tr><td>AssistantAgent</td><td><code>src/assistant/agent.js</code></td><td>Background runs (<code>queued</code>, <code>running</code>, <code>waiting_approval</code>, <code>done</code>, <code>error</code>, <code>cancelled</code>), up to <code>maxConcurrentRuns</code> at once. Builds the MCP config and <code>--allowedTools</code>, spawns <code>claude -p</code>, parses stream-json, keeps the last 50 runs and <code>runs.json</code>. <code>runOnce()</code> serves scheduled agent tasks.</td></tr>
+        <tr><td>ApprovalQueue</td><td><code>src/assistant/approvals.js</code></td><td>Pending approvals with one-line summaries, 5 minute timeout, <code>resolve()</code>, long-poll <code>wait()</code>, and <code>request</code> / <code>resolved</code> events.</td></tr>
+        <tr><td>TaskScheduler</td><td><code>src/assistant/scheduler.js</code></td><td>5 s tick. Emits <code>due</code> once per occurrence, advances recurring tasks without a burst after sleep, persists <code>tasks.json</code> atomically.</td></tr>
+        <tr><td>Time parsing</td><td><code>src/assistant/when.js</code></td><td><code>parseWhen</code> for English phrases such as "tomorrow at 9am" or "every weekday at 8:30", and <code>nextOccurrence</code>.</td></tr>
+        <tr><td>ConversationStore</td><td><code>src/assistant/conversations.js</code></td><td>One JSON file per conversation, including the Claude session id used for <code>--resume</code> and the <code>allowAlways</code> list.</td></tr>
+        <tr><td>ShoppingList</td><td><code>src/assistant/shopping.js</code></td><td><code>shopping.json</code> items with store, price, link and notes.</td></tr>
+        <tr><td>Mac integration</td><td><code>src/assistant/macos.js</code></td><td><code>execFile</code> of <code>osascript</code>, <code>open</code>, <code>pbcopy</code> and <code>pbpaste</code> with escaped AppleScript. <code>CAIRN_MAC_DRYRUN=1</code> returns the script instead of running it.</td></tr>
+        <tr><td>Assistant MCP server</td><td><code>src/assistant/mcp-tools.js</code></td><td>stdio JSON-RPC server named <code>assistant</code>. Tools for tasks, notifications, Reminders, Calendar, apps, URLs, research, shopping and the clipboard, plus the <code>approval_prompt</code> permission tool.</td></tr>
+        <tr><td>Bubble app</td><td><code>desktop/CairnBubble.swift</code>, <code>build.sh</code>, <code>run.sh</code>, <code>Info.plist</code></td><td>Starts or adopts the server, shows the avatar bubble and the chat panel, maps health to the avatar state, restarts an owned server, and offers the Avatar submenu and Start at Login.</td></tr>
+        <tr><td>Web UI</td><td><code>web/bubble.html</code>, <code>bubble.js</code>, <code>bubble.css</code>, <code>web/avatars/*.html</code></td><td>Chat, Activity, Tasks, Shopping and History tabs with approval cards. The three avatar pages each expose <code>window.cairnAvatar.setState()</code> and a <code>#state=…</code> hash.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 id="assistant-process">Process model</h3>
+    <p>A chat turn or a scheduled agent task involves up to six processes. Each boundary uses the same simple, inspectable transports as the engine.</p>
+    <div class="diagram-title">Figure 11 — Assistant process model</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef native fill:#fce7f3,stroke:#db2777,color:#500724
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+
+  subgraph P0["Process 0: Cairn.app"]
+    SW["Swift: bubble, panel, watchdog<br/>WKWebView content processes"]:::native
+  end
+  subgraph P1["Process 1: node bin/cairn.js serve"]
+    HTTP["HTTP API 127.0.0.1:8787"]:::core
+    AGT["AssistantAgent"]:::core
+  end
+  subgraph P2["Process 2: claude -p"]
+    LOOP["--output-format stream-json --verbose<br/>--resume, --strict-mcp-config<br/>--permission-prompt-tool mcp__assistant__approval_prompt"]:::proc
+  end
+  subgraph P3["Process 3: node src/assistant/mcp-tools.js"]
+    AT["assistant tools"]:::proc
+  end
+  subgraph P4["Process 4: node src/agent/mcp-server.js"]
+    CT["cairn tools"]:::proc
+  end
+  subgraph P5["Process 5: npx -y @playwright/mcp@latest"]
+    PT["playwright tools + browser"]:::proc
+  end
+  OS["osascript, open, pbcopy"]:::ext
+  ANTH["Anthropic API"]:::ext
+
+  SW -->|"spawns if nothing answers on :8787<br/>log to data/server.log"| HTTP
+  SW -->|"HTTP poll every 3 s"| HTTP
+  AGT -->|"spawn, args array, prompt on stdin"| LOOP
+  LOOP -->|"stream-json NDJSON on stdout"| AGT
+  LOOP -->|"spawn from --mcp-config, stdio"| AT
+  LOOP -->|"spawn from --mcp-config, stdio"| CT
+  LOOP -->|"spawn if allowBrowser, stdio"| PT
+  AT -->|"HTTP /api/assistant/*"| HTTP
+  CT -->|"HTTP /api/search, /api/fetch"| HTTP
+  HTTP -->|"execFile"| OS
+  LOOP -->|"HTTPS"| ANTH
+    </pre></div>
+    <p class="diagram-caption">The MCP config is written to a temporary file with mode 0600 for each run. <code>CAIRN_API</code>, <code>CAIRN_CONVERSATION_ID</code>, <code>CAIRN_RUN_ID</code> and <code>CAIRN_UNATTENDED</code> reach the assistant tools through their environment, so an approval request is tied to the right run. The app never starts a second server: if something already answers on port 8787 it is adopted and never restarted.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Boundary</th><th>Transport</th><th>Framing</th><th>Timeout and limits</th></tr></thead>
+      <tbody>
+        <tr><td>Cairn.app to server</td><td>HTTP on loopback, and a child <code>Process</code> when the app starts the server</td><td>JSON, SSE inside the panel</td><td>Healthy within 20 s of spawning. Watchdog restart after 3 failed polls (about 9 s), only for a server the app started.</td></tr>
+        <tr><td>Server to <code>claude -p</code></td><td>stdin (prompt), stdout (events)</td><td>stream-json, one JSON object per line</td><td><code>--max-budget-usd</code> (default 2). Cancel kills the child. A failed <code>--resume</code> is retried once without it.</td></tr>
+        <tr><td><code>claude -p</code> to MCP servers</td><td>stdio</td><td>JSON-RPC 2.0, newline-delimited</td><td>Tools are auto-approved or routed to <code>approval_prompt</code>, depending on the allow list.</td></tr>
+        <tr><td>Assistant tools to server</td><td>HTTP on loopback</td><td>JSON, <code>Content-Type: application/json</code></td><td>Approval long-polls of at most 60 s each, 5 minutes overall. Unattended runs are denied after 60 s.</td></tr>
+        <tr><td>Server to macOS</td><td><code>execFile</code></td><td>Arguments array, escaped AppleScript</td><td>Never a shell. Dry-run with <code>CAIRN_MAC_DRYRUN=1</code>.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="tree">File tree</h2>
+    <pre class="code"><code>DxBot/
+├── package.json               "type": "module", npm scripts, zero dependencies
+├── README.md                  quick start
+├── SPEC.md                    build contract between engine modules
+├── SPEC-ASSISTANT.md          build contract for the desktop assistant
+├── bin/
+│   └── cairn.js               CLI: serve, crawl, search, ask, fetch, robots, keys, stats, audit, index, doctor, fixture, demo,
+│                              chat, remind, tasks, approvals, shopping, desktop, assistant
+├── src/
+│   ├── config.js              defaults, env vars, data/config.json persistence, EDITABLE_KEYS
+│   ├── identity.js            roles, robots tokens, User-Agent strings
+│   ├── runtime.js             createRuntime(): wires every component in order
+│   ├── util/
+│   │   ├── url.js             URL normalisation, origin/site helpers, private-host check
+│   │   └── audit.js           AuditLog: ring buffer, NDJSON file, subscribe()
+│   ├── robots/
+│   │   ├── parser.js          RFC 9309 parser, group selection, longest-match evaluation
+│   │   └── cache.js           per-origin robots cache: TTL, stale fallback, shared in-flight fetch
+│   ├── net/
+│   │   ├── ratelimit.js       HostScheduler: per-host delay, concurrency limits, backoff
+│   │   ├── signing.js         Web Bot Auth: Ed25519 keys, RFC 9421 signatures, verifyRequest
+│   │   └── fetcher.js         the compliant fetch pipeline used by every role
+│   ├── extract/
+│   │   ├── html.js            tolerant HTML to text, markdown, links, meta robots
+│   │   └── sitemap.js         sitemap urlset, sitemap index and plain-text parser
+│   ├── index/
+│   │   ├── tokenize.js        lowercase, Unicode words, stopwords, light stemming
+│   │   └── store.js           SearchIndex: BM25, passages, snippets, atomic persistence
+│   ├── crawl/
+│   │   ├── crawler.js         CrawlJob: sitemap seeding, BFS frontier, page outcomes, events
+│   │   ├── jobs.js            JobManager: create, list, cancel, waitFor, last 50 jobs
+│   │   └── corpus.js          JSONL writer for corpus-role crawls
+│   ├── agent/
+│   │   ├── claude.js          spawns claude -p, parses stream-json, availability check
+│   │   ├── answer.js          quick answer: RAG over the local index, extractive fallback
+│   │   ├── research.js        deep research: claude -p with the Cairn MCP tools
+│   │   └── mcp-server.js      stdio MCP server that proxies tools to the HTTP API
+│   ├── assistant/
+│   │   ├── routes.js          createAssistant(): /api/assistant/* routes, SSE, notifications, settings
+│   │   ├── agent.js           AssistantAgent: background runs, claude -p, MCP config, allow list
+│   │   ├── approvals.js       ApprovalQueue: pending approvals, timeouts, summaries
+│   │   ├── conversations.js   ConversationStore: one JSON file per chat, Claude session id
+│   │   ├── scheduler.js       TaskScheduler: reminders and recurring tasks, tasks.json
+│   │   ├── when.js            parseWhen / nextOccurrence: natural-language times
+│   │   ├── shopping.js        ShoppingList: shopping.json
+│   │   ├── macos.js           osascript / open / pbcopy wrappers, dry-run mode
+│   │   └── mcp-tools.js       stdio MCP server "assistant", incl. approval_prompt
+│   └── server/
+│       ├── app.js             startServer(): routing, Host/Origin guards, static files
+│       ├── api.js             /api/* JSON routes
+│       ├── sse.js             Server-Sent Events helper
+│       └── botpage.js         /bot page for site owners
+├── web/
+│   ├── index.html             dashboard shell
+│   ├── app.js                 dashboard views (vanilla ES module)
+│   ├── styles.css             dashboard styles, light and dark
+│   ├── bubble.html            chat panel UI for the floating bubble
+│   ├── bubble.js              Chat, Activity, Tasks, Shopping, History, approval cards
+│   ├── bubble.css             panel styles, light and dark
+│   └── avatars/               avatar-aurora.html, avatar-dots.html, avatar-buddy.html, gallery.html
+├── desktop/
+│   ├── CairnBubble.swift      native bubble app: NSPanel, WKWebView, watchdog, menus
+│   ├── build.sh               bakes paths, compiles with swiftc, ad-hoc signs → build/Cairn.app
+│   ├── run.sh                 builds if needed, then opens the app
+│   ├── install.sh             copies it to /Applications, registers it, pins it to the Dock, launches it
+│   └── Info.plist             Dock app (LSUIElement false), local networking, bundle id com.cairn.bubble
+├── docs/
+│   ├── *.html                 this documentation
+│   └── assets/                docs.css, local mermaid.min.js, TEMPLATE.html
+├── fixtures/
+│   └── site-server.js         "Northwind Trails" demo site with robots.txt edge cases
+├── test/
+│   ├── *.test.js              node:test suites (unit, integration, e2e, optional live Claude)
+│   └── fixtures/fake-claude.js  fake Claude CLI that emits stream-json for tests
+└── data/                      runtime state (git-ignored; see Data stores)</code></pre>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

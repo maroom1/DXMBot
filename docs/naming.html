@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why "Cairn" — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Why "Cairn"</h1>
+    <p class="lead">A cairn is a stack of stones that marks a trail. It guides travellers without harming the land. The name describes the product's aim: a crawler that marks and finds paths through the web and leaves it undisturbed.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#metaphor">The metaphor</a></li>
+      <li><a href="#criteria">Selection criteria</a></li>
+      <li><a href="#keywords">Words deliberately kept out of the name</a></li>
+      <li><a href="#layers">Name layers: product name vs. honest identity</a></li>
+      <li><a href="#alternatives">Alternatives considered</a></li>
+      <li><a href="#collisions">Collision check</a></li>
+      <li><a href="#edr">If an EDR still flags Cairn</a></li>
+    </ol></div>
+
+    <h2 id="metaphor">The metaphor</h2>
+    <p>Hikers build cairns above the tree line, where paths disappear. A cairn is visible from far away, anyone can read it, and it does not change the ground it sits on. Each property maps to a design rule in Cairn.</p>
+    <div class="diagram-title">Figure 1 — From trail marker to design rule</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph TRAIL ["A cairn on a trail"]
+    S1["Visible from far away"]
+    S2["Built from what is already there"]
+    S3["Points the way, does not fence it"]
+    S4["Leave no trace"]
+  end
+  subgraph PROD ["Cairn the product"]
+    P1["Honest identity<br/>role tokens + /bot page + signatures"]
+    P2["Zero dependencies<br/>node built-ins only"]
+    P3["Cited answers<br/>every claim points to a source"]
+    P4["robots.txt + politeness<br/>1 request per host, backoff"]
+  end
+  S1 --> P1
+  S2 --> P2
+  S3 --> P3
+  S4 --> P4
+    </pre></div>
+    <p class="diagram-caption">Each property of a physical cairn corresponds to a rule the software follows.</p>
+
+    <h2 id="criteria">Selection criteria</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Criterion</th><th>Why it matters</th><th>How "Cairn" scores</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Short</strong></td><td>It goes into robots tokens, UA strings, log lines and CLI commands. Short names stay readable in <code>CairnSearch/1.0</code></td><td><span class="badge good">Pass</span> 5 letters, one syllable</td></tr>
+        <tr><td><strong>Memorable and pronounceable</strong></td><td>Site owners have to recognise it in their logs and type it into robots.txt</td><td><span class="badge good">Pass</span> an ordinary English word ("kern" or "kairn")</td></tr>
+        <tr><td><strong>Carries the product's intent</strong></td><td>The name should say "guides, does not harm"</td><td><span class="badge good">Pass</span> a trail marker</td></tr>
+        <tr><td><strong>No collision with malware, C2 or offensive-tool names</strong></td><td>Threat-intel feeds and EDR rules match on family names. A shared name produces false positives and alarming search results</td><td><span class="badge good">Pass</span> no malware family found. There is a namespace overlap with a <em>defensive</em> research toolkit; see <a href="#collisions">collision check</a></td></tr>
+        <tr><td><strong>No aggressive or evasive words</strong> in the product or executable name</td><td>EDR keyword heuristics (for example in SentinelOne-class products) and bot-management keyword rules react to words like "scraper" or "stealth"</td><td><span class="badge good">Pass</span> see the <a href="#keywords">keyword table</a></td></tr>
+        <tr><td><strong>Forms valid robots.txt product tokens</strong></td><td>RFC 9309 says product tokens should contain only <code>a-z A-Z _ -</code>. Digits and dots are out</td><td><span class="badge good">Pass</span> <code>CairnSearch</code>, <code>CairnCorpus</code>, <code>Cairn-User</code>, <code>Cairn</code></td></tr>
+        <tr><td><strong>Substring-safe in logs</strong></td><td>A token that appears inside common words causes false matches in <code>grep</code>, WAF rules and naive UA substring checks</td><td><span class="badge good">Pass</span> "cairn" does not appear inside common English words</td></tr>
+        <tr><td><strong>Neutral tone</strong></td><td>It should not sound like surveillance, extraction or warfare</td><td><span class="badge good">Pass</span></td></tr>
+        <tr><td><strong>Trademark clearance</strong></td><td>Needed before any public or commercial release</td><td><span class="badge warn">Not done</span> no formal search has been done. This is an internal project name</td></tr>
+      </tbody>
+    </table></div>
+    <div class="diagram-title">Figure 2 — The screening funnel each candidate went through</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  C["Candidate name"] --> Q1{"Short, 1-2 syllables?"}
+  Q1 -->|"no"| X["Rejected"]
+  Q1 -->|"yes"| Q2{"Matches a known malware,<br/>C2 or offensive-tool name?"}
+  Q2 -->|"yes"| X
+  Q2 -->|"no"| Q3{"Contains an aggressive<br/>or evasive keyword?"}
+  Q3 -->|"yes"| X
+  Q3 -->|"no"| Q4{"Valid RFC 9309 token<br/>and substring-safe?"}
+  Q4 -->|"no"| X
+  Q4 -->|"yes"| Q5{"Metaphor fits:<br/>guide without harm?"}
+  Q5 -->|"weak"| SL["Shortlist as fallback"]
+  Q5 -->|"strong"| OK["Chosen: Cairn"]
+    </pre></div>
+    <p class="diagram-caption">The screens are ordered from cheapest to check to most subjective. The metaphor is judged last.</p>
+
+    <h2 id="keywords">Words deliberately kept out of the name</h2>
+    <p>These words were excluded from the <strong>product and executable name</strong>, meaning anything that appears as a process name, binary, package name or install path on the operator's machine. Many are accurate descriptions of what the software does. The aim is not to hide that, because the User-Agent says it plainly. The aim is to avoid tripping generic keyword heuristics that do not look at behaviour.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Word</th><th>Why avoided</th></tr></thead>
+      <tbody>
+        <tr><td><code>bot</code></td><td>Very common in bot-management and WAF keyword rules, and in EDR detections for botnet clients. (The site-owner URL <code>/bot</code> keeps it deliberately; see below.)</td></tr>
+        <tr><td><code>crawler</code>, <code>spider</code></td><td>Bot-management products and some proxy filters classify on these words before they look at behaviour</td></tr>
+        <tr><td><code>scraper</code>, <code>harvest</code></td><td>Suggest content extraction. "Harvest" is also common in descriptions of credential-harvesting malware</td></tr>
+        <tr><td><code>stealth</code>, <code>ghost</code>, <code>shadow</code></td><td>Suggest evasion, which is the opposite of Cairn's design. They are also frequent in malware and offensive-tool naming</td></tr>
+        <tr><td><code>sentinel</code></td><td>Collides with EDR product names such as SentinelOne and Microsoft Sentinel, which confuses triage in the security console</td></tr>
+        <tr><td><code>beacon</code></td><td>"Beacon" is Cobalt Strike's implant, so detections and threat-intel queries key on it. It was attractive as a metaphor and was rejected for that reason</td></tr>
+        <tr><td>Stealer-like or C2-like names (<code>Lumma</code>-, <code>Vidar</code>-, <code>RedLine</code>-, <code>Raccoon</code>-, <code>Sliver</code>-, <code>Havoc</code>-, <code>Mythic</code>-style)</td><td>These are known infostealer and C2 family names. Anything close to them attracts both automated and human suspicion</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout"><strong>The honesty rule outranks the keyword rule.</strong> On the wire, Cairn identifies itself fully and conventionally. The UA reads <code>compatible; CairnSearch/1.0; +http://127.0.0.1:8787/bot</code> (or <code>CairnCorpus</code> / <code>Cairn-User</code>). The info URL uses the conventional <code>/bot</code> path, as <code>openai.com/bot</code> does. Choosing a calm product name is about local process heuristics. It is never about making Cairn's traffic look like something else.</div>
+
+    <h2 id="layers">Name layers: product name vs. honest identity</h2>
+    <div class="diagram-title">Figure 3 — Where each form of the name appears</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  N["Product name<br/>Cairn"] --> E["Executable and package<br/>bin/cairn.js, package cairn"]
+  N --> T["robots.txt tokens<br/>CairnSearch, CairnCorpus,<br/>Cairn-User, family Cairn"]
+  T --> U["User-Agent header<br/>compatible; CairnSearch/1.0;<br/>+base/bot"]
+  U --> B["Site-owner page /bot<br/>roles, IP JSON, keys, contact"]
+  N --> K["Web Bot Auth<br/>Signature-Agent + key directory"]
+  K --> B
+  E --> P["Local processes<br/>node, claude, node mcp-server.js"]
+    </pre></div>
+    <p class="diagram-caption">Local artefacts (left and bottom) use the calm product name. Everything a remote site sees (right) is explicit and verifiable.</p>
+
+    <h2 id="alternatives">Alternatives considered</h2>
+    <div class="diagram-title">Figure 4 — Candidates by distinctiveness and metaphor strength</div>
+    <div class="diagram"><pre class="mermaid">
+quadrantChart
+  title Candidate names
+  x-axis Crowded namespace --> Distinctive
+  y-axis Weak metaphor --> Strong metaphor
+  quadrant-1 Shortlist
+  quadrant-2 Evocative but crowded
+  quadrant-3 Reject
+  quadrant-4 Distinct but flat
+  Cairn: [0.78, 0.86]
+  Wayfinder: [0.35, 0.8]
+  Meridian: [0.2, 0.55]
+  Almanac: [0.45, 0.4]
+  Folio: [0.3, 0.3]
+  Tern: [0.62, 0.45]
+    </pre></div>
+    <p class="diagram-caption">These are subjective scores from the naming review. They are meant to show the trade-off, not to measure anything.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Candidate</th><th>Pros</th><th>Cons</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Folio</strong></td><td>Short, and suggests documents and libraries</td><td>Already a well-known open-source library-services platform (FOLIO) and a common product word. It suggests storage, not navigation or retrieval</td><td><span class="badge bad">Rejected</span></td></tr>
+        <tr><td><strong>Wayfinder</strong></td><td>Strong navigation metaphor, friendly</td><td>Nine letters make long tokens (<code>WayfinderSearch</code>). Many existing products use the name. "Finder" collides with macOS Finder in process lists</td><td><span class="badge warn">Fallback</span></td></tr>
+        <tr><td><strong>Almanac</strong></td><td>Suggests reference knowledge and trustworthy facts</td><td>Implies a static compendium rather than live retrieval. Awkward as a token (<code>AlmanacCorpus</code>). Existing products use it</td><td><span class="badge bad">Rejected</span></td></tr>
+        <tr><td><strong>Tern</strong></td><td>Four letters. The Arctic tern's long migration suggests range and endurance</td><td>Not substring-safe: "tern" appears in <em>internal</em>, <em>pattern</em>, <em>western</em> and <em>alternate</em>, so grep and naive UA substring rules would misfire. It is also easily misread as "term" or "turn"</td><td><span class="badge bad">Rejected</span></td></tr>
+        <tr><td><strong>Meridian</strong></td><td>Navigation, elegant</td><td>A very crowded name across finance, healthcare and software. Eight letters. Suggests geography more than retrieval</td><td><span class="badge bad">Rejected</span></td></tr>
+        <tr><td><strong>Cairn</strong></td><td>Short, distinctive, substring-safe, and the metaphor fits the ethics exactly</td><td>A defensive security research toolkit shares the name (see below). Pronunciation varies slightly</td><td><span class="badge good">Chosen</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="collisions">Collision check</h2>
+    <p>A web search at the time of writing (2026-09-30) found no malware family, ransomware strain, C2 framework or offensive tool named Cairn. It did find one overlap to note:</p>
+    <div class="callout warn"><strong>Namespace overlap: Cisco Talos "CAIRN".</strong> In September 2026 Cisco Talos open-sourced a <em>defensive</em> research toolkit called CAIRN (Cognitive Artifact Intelligence Research Network), which tracks AI-integrated malware. It is not a malware family, so it should not trigger malware-name detections. However, a security analyst searching "Cairn" may find it first. Cairn's User-Agent tokens (<code>CairnSearch</code>, <code>CairnCorpus</code>, <code>Cairn-User</code>) and its <code>/bot</code> page make the distinction clear. If the overlap causes friction in a particular organisation, <strong>Wayfinder</strong> is the fallback name, since the tokens are defined in one place (<code>src/identity.js</code>).</div>
+
+    <h2 id="edr">If an EDR still flags Cairn</h2>
+    <p>A calm name lowers the chance of a keyword-based false positive, but it cannot rule one out. Behavioural engines look at what processes do. Cairn starts a local HTTP server, spawns the Claude CLI, which in turn spawns a Node MCP server, and makes outbound HTTP requests to many hosts. Some EDR products score that pattern as suspicious.</p>
+    <div class="callout bad"><strong>The correct fix is an IT allowlist. It is never obfuscation.</strong> Ask your security team for an exclusion scoped by <strong>path</strong>, <strong>file hash</strong> or <strong>code-signing identity</strong> (publisher) for the Node.js and Claude CLI binaries, and optionally for the project directory. Do <em>not</em> rename binaries to look like system processes, pack or obfuscate scripts, run from temp directories to dodge path rules, disable or tamper with the EDR agent, or add any detection-evasion logic to Cairn. Each of these is a policy violation in its own right and would rightly turn a false positive into a real incident.</div>
+    <div class="diagram-title">Figure 5 — Process tree to give your IT or security team</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  SH["Terminal / shell"] --> N1["node bin/cairn.js serve<br/>listens on 127.0.0.1:8787"]
+  N1 -->|"spawn, no shell, prompt on stdin"| CL["claude -p<br/>cwd data/agent-work, built-in tools off"]
+  CL -->|"spawn via --mcp-config"| N2["node src/agent/mcp-server.js<br/>stdio JSON-RPC"]
+  N2 -->|"HTTP to 127.0.0.1 only"| N1
+  N1 -->|"HTTPS/HTTP, honest UA, signed"| WEB[("Sites the operator chose")]
+  CL -->|"HTTPS"| API[("Anthropic API")]
+  N1 --> FS[("data/ directory")]
+    </pre></div>
+    <p class="diagram-caption">This is the full expected behaviour. Anything outside this tree, such as other child processes, writes outside <code>data/</code> or the temp directory, or listeners on non-loopback interfaces, is not Cairn behaviour and should be investigated.</p>
+    <h3>Facts sheet for an allowlist request</h3>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Item</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td>Binaries</td><td><code>node</code> (Node.js 20 or later, from your managed install) and <code>claude</code> (Claude CLI, from your managed install). Allowlist them by publisher signature or hash, not by name</td></tr>
+        <tr><td>Scripts</td><td><code>bin/cairn.js</code>, <code>src/**</code>, <code>fixtures/site-server.js</code> in the project directory. Plain-text ES modules with no minification and no npm dependencies</td></tr>
+        <tr><td>Listening sockets</td><td><code>127.0.0.1:8787</code> (server), and optionally <code>127.0.0.1:8788</code> (demo fixture). Tests use ephemeral loopback ports</td></tr>
+        <tr><td>Outbound traffic</td><td>Only URLs the operator crawls or asks about, sent with UA <code>…CairnSearch/1.0 / CairnCorpus/1.0 / Cairn-User/1.0; +…/bot</code>. The Claude CLI connects to the Anthropic API</td></tr>
+        <tr><td>Files written</td><td><code>data/</code> (config, audit log, index, corpus, keys with the private key at mode 0600, agent-work) and short-lived MCP config and source files in the OS temp directory</td></tr>
+        <tr><td>Child processes</td><td><code>claude</code>, only for Ask and Research. <code>node src/agent/mcp-server.js</code>, spawned by <code>claude</code>. Nothing else</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

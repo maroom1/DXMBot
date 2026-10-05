@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Cairn dashboard: a transparent, robots.txt-respecting web retrieval and answer engine.">
+  <title>Cairn</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cellipse cx='16' cy='26.5' rx='12.5' ry='4' fill='%2364748b'/%3E%3Cellipse cx='15.5' cy='19.8' rx='9.5' ry='3.5' fill='%2394a3b8'/%3E%3Cellipse cx='16.5' cy='13.6' rx='6.8' ry='3' fill='%230f766e'/%3E%3Cellipse cx='15.8' cy='8.2' rx='4.4' ry='2.5' fill='%23cbd5e1'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/web/styles.css">
+  <script type="module" src="/web/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="app-header">
+    <a class="brand" href="#ask" aria-label="Cairn home">
+      <svg class="logo" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true" focusable="false">
+        <ellipse class="stone stone-1" cx="16" cy="26.5" rx="12.5" ry="4"/>
+        <ellipse class="stone stone-2" cx="15.5" cy="19.8" rx="9.5" ry="3.5"/>
+        <ellipse class="stone stone-3" cx="16.5" cy="13.6" rx="6.8" ry="3"/>
+        <ellipse class="stone stone-4" cx="15.8" cy="8.2" rx="4.4" ry="2.5"/>
+      </svg>
+      <span class="brand-text">
+        <span class="brand-name">Cairn</span>
+        <span class="brand-tag">transparent retrieval &amp; answers</span>
+      </span>
+    </a>
+    <div class="header-spacer"></div>
+    <span id="health-pill" class="pill pill-muted" role="status" title="Checking server health">
+      <span class="pill-dot" aria-hidden="true"></span><span class="pill-text">Checking…</span>
+    </span>
+    <span id="app-version" class="header-version" hidden></span>
+    <nav class="header-links" aria-label="External">
+      <a class="header-assistant" id="assistant-link" href="/assistant" title="Open the Cairn assistant (chat, reminders, tasks, shopping)">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/><path d="M8.5 9.5h.01M12 9.5h.01M15.5 9.5h.01"/></svg>
+        <span>Assistant</span><span class="assistant-badge" id="assistant-badge" hidden></span>
+      </a>
+      <a id="avatars-link" href="/web/avatars/gallery.html" target="_blank" rel="noopener" hidden>Avatars</a>
+      <a href="/docs/" target="_blank" rel="noopener">Docs</a>
+      <a href="/bot" target="_blank" rel="noopener">Bot info</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <nav class="sidenav" aria-label="Views">
+      <ul class="nav-list">
+        <li><a class="nav-link" href="#ask" data-nav="ask">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
+          <span>Ask</span></a></li>
+        <li><a class="nav-link" href="#crawl" data-nav="crawl">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M8.2 6h7.6M7.1 8l3.8 8M16.9 8l-3.8 8"/></svg>
+          <span>Crawl</span></a></li>
+        <li><a class="nav-link" href="#index" data-nav="index">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg>
+          <span>Index</span></a></li>
+        <li><a class="nav-link" href="#fetch" data-nav="fetch">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.8 3 2.8 14 0 17M12 3.5c-2.8 3-2.8 14 0 17"/></svg>
+          <span>Fetch inspector</span></a></li>
+        <li><a class="nav-link" href="#robots" data-nav="robots">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.8-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.7-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>
+          <span>Robots tester</span></a></li>
+        <li><a class="nav-link" href="#audit" data-nav="audit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>
+          <span>Audit</span></a></li>
+        <li><a class="nav-link" href="#identity" data-nav="identity">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.2c.8-1.4 1.9-2 3.2-2s2.4.6 3.2 2M14.5 10h4M14.5 13.5h3"/></svg>
+          <span>Identity</span></a></li>
+        <li><a class="nav-link" href="#settings" data-nav="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+          <span>Settings</span></a></li>
+      </ul>
+      <div class="nav-footer">
+        <p>Cairn identifies itself honestly, honours robots.txt and signs requests with Web Bot Auth.</p>
+        <a href="/bot" target="_blank" rel="noopener">For site owners →</a>
+      </div>
+    </nav>
+
+    <main id="main" tabindex="-1">
+      <!-- ASK -->
+      <section class="view view-ask" data-view="ask" hidden>
+        <div class="ask-layout">
+          <div class="thread" id="ask-thread" aria-live="polite">
+            <div class="ask-empty" id="ask-empty">
+              <svg class="logo logo-lg" viewBox="0 0 32 32" width="56" height="56" aria-hidden="true" focusable="false">
+                <ellipse class="stone stone-1" cx="16" cy="26.5" rx="12.5" ry="4"/>
+                <ellipse class="stone stone-2" cx="15.5" cy="19.8" rx="9.5" ry="3.5"/>
+                <ellipse class="stone stone-3" cx="16.5" cy="13.6" rx="6.8" ry="3"/>
+                <ellipse class="stone stone-4" cx="15.8" cy="8.2" rx="4.4" ry="2.5"/>
+              </svg>
+              <h1>Ask Cairn</h1>
+              <p class="muted">Answers are grounded in pages Cairn has crawled, with numbered citations back to each source.</p>
+              <div class="suggestions" id="ask-suggestions">
+                <button type="button" class="suggestion">How much does the Ridgeback 45 weigh?</button>
+                <button type="button" class="suggestion">What is the return window?</button>
+                <button type="button" class="suggestion">What warranty comes with packs?</button>
+                <button type="button" class="suggestion">Where is Northwind Trails headquartered?</button>
+              </div>
+            </div>
+          </div>
+
+          <form class="composer" id="ask-form" autocomplete="off">
+            <div class="composer-top">
+              <div class="segmented" role="radiogroup" aria-label="Answer mode">
+                <button type="button" role="radio" aria-checked="true" data-mode="quick" class="active">Quick</button>
+                <button type="button" role="radio" aria-checked="false" data-mode="deep">Deep research</button>
+              </div>
+              <p class="composer-hint" id="ask-hint"></p>
+              <button type="button" class="btn btn-ghost btn-sm" id="ask-clear" title="Clear conversation">Clear</button>
+            </div>
+            <div class="composer-box">
+              <label class="sr-only" for="ask-input">Question</label>
+              <textarea id="ask-input" rows="1" placeholder="Ask a question about your indexed sites…" required></textarea>
+              <button type="button" class="btn btn-secondary" id="ask-stop" hidden>Stop</button>
+              <button type="submit" class="btn btn-primary" id="ask-send">Ask</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- CRAWL -->
+      <section class="view" data-view="crawl" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Crawl</h1>
+            <p class="muted">Start a polite crawl. Every URL is checked against robots.txt for the chosen role before it is requested; crawl-delay and per-host rate limits are enforced by the fetcher.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="crawl-refresh">Refresh</button>
+        </div>
+        <div class="crawl-grid">
+          <form class="card form-card" id="crawl-form" autocomplete="off">
+            <h2 class="card-title">New crawl job</h2>
+            <label class="field">
+              <span class="field-label">Seed URLs <span class="field-hint">one per line</span></span>
+              <textarea id="crawl-seeds" rows="3" placeholder="https://example.com/" required></textarea>
+            </label>
+            <fieldset class="field role-picker">
+              <legend class="field-label">Role</legend>
+              <label class="radio-card">
+                <input type="radio" name="crawl-role" value="search" checked>
+                <span><strong>CairnSearch</strong><small>Search index crawl; pages become citable in answers.</small></span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="crawl-role" value="corpus">
+                <span><strong>CairnCorpus</strong><small>Dataset collection to JSONL; not added to the index. Opt-out is independent of search.</small></span>
+              </label>
+            </fieldset>
+            <div class="field-row">
+              <label class="field">
+                <span class="field-label">Max pages</span>
+                <input type="number" id="crawl-max-pages" min="1" max="10000" value="50">
+              </label>
+              <label class="field">
+                <span class="field-label">Max depth</span>
+                <input type="number" id="crawl-max-depth" min="0" max="20" value="2">
+              </label>
+            </div>
+            <label class="check"><input type="checkbox" id="crawl-same-site" checked><span>Stay on the seed site</span></label>
+            <label class="check"><input type="checkbox" id="crawl-sitemaps" checked><span>Use sitemaps (robots.txt <code>Sitemap:</code> lines and /sitemap.xml)</span></label>
+            <details class="advanced">
+              <summary>Advanced scope</summary>
+              <label class="field">
+                <span class="field-label">Include patterns <span class="field-hint">regex, one per line</span></span>
+                <textarea id="crawl-include" rows="2" placeholder="^https://example\.com/docs/"></textarea>
+              </label>
+              <label class="field">
+                <span class="field-label">Exclude patterns <span class="field-hint">regex, one per line</span></span>
+                <textarea id="crawl-exclude" rows="2" placeholder="\?sort="></textarea>
+              </label>
+            </details>
+            <button type="submit" class="btn btn-primary btn-block" id="crawl-submit">Start crawl</button>
+          </form>
+          <div class="jobs" id="crawl-jobs">
+            <div class="empty-state">No crawl jobs yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INDEX -->
+      <section class="view" data-view="index" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Index</h1>
+            <p class="muted">Documents indexed by CairnSearch (and pages you chose to index from user fetches).</p>
+          </div>
+          <div class="head-actions">
+            <button type="button" class="btn btn-secondary" id="index-refresh">Refresh</button>
+            <button type="button" class="btn btn-danger" id="index-clear">Clear index</button>
+          </div>
+        </div>
+        <div class="stat-grid" id="index-stats"></div>
+        <div class="index-grid">
+          <aside class="card sites-card">
+            <h2 class="card-title">Sites</h2>
+            <ul class="site-list" id="index-sites"></ul>
+          </aside>
+          <div class="index-main">
+            <form class="search-bar" id="index-search-form" role="search" autocomplete="off">
+              <label class="sr-only" for="index-q">Search the index</label>
+              <input type="search" id="index-q" placeholder="Search the index (BM25)…">
+              <button type="submit" class="btn btn-primary">Search</button>
+            </form>
+            <div class="result-meta" id="index-meta"></div>
+            <div class="results" id="index-results"></div>
+            <div class="pager" id="index-pager"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FETCH INSPECTOR -->
+      <section class="view" data-view="fetch" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Fetch inspector</h1>
+            <p class="muted">See exactly what Cairn sends and receives: robots decision, identity and signature headers, redirects, response and extracted content.</p>
+          </div>
+        </div>
+        <form class="card toolbar-form" id="fetch-form" autocomplete="off">
+          <label class="field grow">
+            <span class="field-label">URL</span>
+            <input type="url" id="fetch-url" placeholder="https://example.com/page" required>
+          </label>
+          <label class="field">
+            <span class="field-label">Role</span>
+            <select id="fetch-role">
+              <option value="user" selected>Cairn-User (user-triggered)</option>
+              <option value="search">CairnSearch (search crawl)</option>
+              <option value="corpus">CairnCorpus (corpus)</option>
+            </select>
+          </label>
+          <label class="check check-inline"><input type="checkbox" id="fetch-index"><span>Add to index</span></label>
+          <button type="submit" class="btn btn-primary" id="fetch-submit">Fetch</button>
+        </form>
+        <div id="fetch-out" class="stack"></div>
+      </section>
+
+      <!-- ROBOTS TESTER -->
+      <section class="view" data-view="robots" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Robots tester</h1>
+            <p class="muted">Evaluate a URL for every Cairn role using the live robots.txt, or paste a draft robots.txt to test it locally (RFC 9309 longest-match).</p>
+          </div>
+        </div>
+        <form class="card form-card" id="robots-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">URL</span>
+            <input type="url" id="robots-url" placeholder="https://example.com/private/page.html" required>
+          </label>
+          <details class="advanced" id="robots-paste">
+            <summary>Test a pasted robots.txt instead of the live one</summary>
+            <label class="field">
+              <span class="field-label">robots.txt <span class="field-hint">leave empty to use the site's live file</span></span>
+              <textarea id="robots-txt" rows="10" class="mono" spellcheck="false" placeholder="User-agent: CairnSearch&#10;Disallow: /private/"></textarea>
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" id="robots-example">Load example</button>
+          </details>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Check</button>
+          </div>
+        </form>
+        <div id="robots-out" class="stack"></div>
+        <div class="card">
+          <div class="card-head">
+            <h2 class="card-title">robots.txt cache</h2>
+            <div class="head-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="robots-cache-refresh">Refresh</button>
+              <button type="button" class="btn btn-danger btn-sm" id="robots-cache-clear">Clear cache</button>
+            </div>
+          </div>
+          <div id="robots-cache" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- AUDIT -->
+      <section class="view" data-view="audit" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Audit</h1>
+            <p class="muted">Every network action Cairn takes, as it happens.</p>
+          </div>
+          <span class="live-indicator" id="audit-live"><span class="pill-dot" aria-hidden="true"></span><span class="live-text">Offline</span></span>
+        </div>
+        <div class="stat-grid stat-grid-sm" id="audit-stats"></div>
+        <div class="card toolbar-form audit-toolbar">
+          <label class="field">
+            <span class="field-label">Role</span>
+            <select id="audit-role">
+              <option value="">All roles</option>
+              <option value="search">search</option>
+              <option value="corpus">corpus</option>
+              <option value="user">user</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Kind</span>
+            <select id="audit-kind">
+              <option value="">All kinds</option>
+              <option value="fetch">fetch</option>
+              <option value="robots">robots</option>
+              <option value="crawl">crawl</option>
+              <option value="agent">agent</option>
+              <option value="system">system</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span class="field-label">Filter</span>
+            <input type="search" id="audit-text" placeholder="host, URL, status…">
+          </label>
+          <label class="check check-inline"><input type="checkbox" id="audit-pause"><span>Pause</span></label>
+          <button type="button" class="btn btn-secondary" id="audit-reload">Reload</button>
+        </div>
+        <div class="card table-card">
+          <div class="table-wrap">
+            <table class="data-table audit-table">
+              <thead>
+                <tr><th>Time</th><th>Kind</th><th>Role</th><th>Status</th><th>URL / detail</th><th>Robots</th><th class="num">Bytes</th><th class="num">ms</th><th>Flags</th></tr>
+              </thead>
+              <tbody id="audit-body"></tbody>
+            </table>
+          </div>
+          <div class="table-foot muted" id="audit-foot"></div>
+        </div>
+      </section>
+
+      <!-- IDENTITY -->
+      <section class="view" data-view="identity" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Identity</h1>
+            <p class="muted">Who Cairn says it is. One product family, three independently controllable robots.txt tokens.</p>
+          </div>
+          <div class="head-actions">
+            <a class="btn btn-secondary" href="/bot" target="_blank" rel="noopener">Bot info page</a>
+            <a class="btn btn-secondary" href="/docs/" target="_blank" rel="noopener">Docs</a>
+          </div>
+        </div>
+        <div id="identity-out" class="stack"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="view" data-view="settings" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Settings</h1>
+            <p class="muted">Runtime configuration. Changes are saved to the data directory and apply immediately.</p>
+          </div>
+        </div>
+        <form id="settings-form" class="settings-form" autocomplete="off">
+          <div id="settings-sections" class="settings-sections"></div>
+          <div class="settings-actions">
+            <button type="button" class="btn btn-secondary" id="settings-reset">Discard changes</button>
+            <button type="submit" class="btn btn-primary" id="settings-save">Save settings</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div class="drawer" id="drawer" hidden>
+    <div class="drawer-backdrop" data-close></div>
+    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head">
+        <h2 id="drawer-title">Details</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </header>
+      <div class="drawer-body" id="drawer-body"></div>
+    </aside>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+</body>
+</html>

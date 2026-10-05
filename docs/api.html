@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTTP API reference — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>HTTP API reference</h1>
+    <p class="lead">Every route served by <code>cairn serve</code>: what it takes, what it returns, how it fails, and what a caller must send to get past the local security guards.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#conventions">Conventions</a></li>
+      <li><a href="#security">Security requirements for callers</a></li>
+      <li><a href="#route-map">Route map</a></li>
+      <li><a href="#lifecycle">Request lifecycle</a></li>
+      <li><a href="#pages">Pages</a></li>
+      <li><a href="#identity">Identity</a></li>
+      <li><a href="#search-ask">Search &amp; Ask</a></li>
+      <li><a href="#crawl">Crawl</a></li>
+      <li><a href="#fetch-robots">Fetch &amp; Robots</a></li>
+      <li><a href="#index">Index</a></li>
+      <li><a href="#audit-stats">Audit &amp; Stats</a></li>
+      <li><a href="#config">Config</a></li>
+      <li><a href="#signatures">Signatures</a></li>
+      <li><a href="#assistant">Assistant</a> (<code>/api/assistant/*</code>)</li>
+      <li><a href="#sse">SSE event catalogue</a></li>
+      <li><a href="#errors">Error codes</a></li>
+      <li><a href="#curl">curl cookbook</a></li>
+    </ol></div>
+
+    <h2 id="conventions">Conventions</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Aspect</th><th>Rule</th></tr>
+      <tr><td>Base URL</td><td><code>http://127.0.0.1:8787</code> by default (<code>CAIRN_PORT</code> / <code>--port</code> change the port). The server binds <code>127.0.0.1</code> only.</td></tr>
+      <tr><td>Encoding</td><td>Requests and responses are UTF-8 JSON unless a route says otherwise (HTML pages, static files, SSE streams).</td></tr>
+      <tr><td>Request bodies</td><td><code>POST</code> and <code>DELETE</code> (and <code>PUT</code>/<code>PATCH</code>, which no route uses) must send <code>Content-Type: application/json</code>. Bodies are limited to 1 MB and must be a JSON <em>object</em>; an empty body is treated as <code>{}</code>.</td></tr>
+      <tr><td>Query strings</td><td><code>GET</code> routes take parameters from the query string (URL-encoded). Integer parameters are parsed with <code>parseInt</code> and clamped to a safe range; invalid values fall back to the default.</td></tr>
+      <tr><td>Paths</td><td>A trailing slash on an <code>/api/</code> path is ignored (<code>/api/stats/</code> = <code>/api/stats</code>). <code>HEAD</code> is accepted wherever <code>GET</code> is.</td></tr>
+      <tr><td>Errors</td><td>Always <code>{"error": "message"}</code> with a 4xx/5xx status. Unknown paths return <code>404</code>; a known path with the wrong method returns <code>405</code> with an <code>Allow</code> header. An <em>unexpected</em> failure (a filesystem or system error, not a validation error) returns <code>500</code> with a generic body, <code>{"error": "Internal server error", "id": "3f9a0c1e5b27"}</code>; the details (which may contain internal paths) are written only to the server log as <code>[cairn] request failed (3f9a0c1e5b27): …</code>, so quote the <code>id</code> when reporting a problem.</td></tr>
+      <tr><td>Caching</td><td>JSON responses carry <code>Cache-Control: no-store</code>; static files and HTML pages <code>no-cache</code>; the IP-range and key-directory documents <code>public, max-age=3600</code>.</td></tr>
+      <tr><td>Roles</td><td><code>role</code> is one of <code>search</code> (<code>CairnSearch</code>), <code>corpus</code> (<code>CairnCorpus</code>), <code>user</code> (<code>Cairn-User</code>). Unknown roles return <code>400</code>.</td></tr>
+      <tr><td>CORS</td><td>None. The API is for the bundled web UI, the CLI and the research agent's MCP bridge, all same-origin or non-browser.</td></tr>
+    </table></div>
+
+    <h2 id="security">Security requirements for callers</h2>
+    <p>The API controls a crawler, so it is guarded against the two ways a hostile web page could drive a localhost service: DNS rebinding and cross-site request forgery. Non-browser clients (curl, the CLI, the MCP bridge) pass these checks without effort; browsers pass them only from the Cairn UI itself.</p>
+    <p>Checks run in the order below; the first failure short-circuits the request with an error JSON.</p>
+    <div class="table-scroll"><table>
+      <tr><th>#</th><th>Check</th><th>Applies to</th><th>Requirement</th><th>Failure</th></tr>
+      <tr><td>1</td><td>Host header</td><td>every request</td><td><code>Host</code> must be one of <code>127.0.0.1:&lt;port&gt;</code>, <code>localhost:&lt;port&gt;</code>, <code>[::1]:&lt;port&gt;</code>, the bind address with the port, or — only when <code>CAIRN_PUBLIC_URL</code> is set explicitly — that URL's host (DNS-rebinding guard).</td><td><code>421 Misdirected Request</code></td></tr>
+      <tr><td>2</td><td>Bot-UA loop guard</td><td>every <code>/api/*</code> request, any method</td><td>The <code>User-Agent</code> must not carry one of Cairn's own bot tokens followed by a version, i.e. must not match <code>\b(CairnSearch|CairnCorpus|Cairn-User)/\d</code>. This stops a prompt-injected research agent (<code>fetch_page</code> on <code>http://127.0.0.1:&lt;port&gt;/api/…</code>) or a crawl of the server from driving its own API.</td><td><code>403</code> <code>{"error": "Cairn's own bots may not call its API"}</code></td></tr>
+      <tr><td>3</td><td>Origin / Sec-Fetch-Site (reads)</td><td><code>GET</code>, <code>HEAD</code> under <code>/api/</code></td><td>If <code>Origin</code> is present it must be an allowed origin (below). <code>Sec-Fetch-Site</code> must not be <code>cross-site</code> or <code>same-site</code> (another localhost port is same-site).</td><td><code>403</code> <code>{"error": "Cross-origin request rejected"}</code></td></tr>
+      <tr><td>4</td><td>Same-origin proof</td><td><code>GET /api/ask/stream</code> only (it spends Claude budget and, in deep mode, starts fetches)</td><td>At least one of: <code>Sec-Fetch-Site: same-origin</code> or <code>none</code>; an <code>X-Cairn-Client</code> header (any value — a cross-site page cannot add custom headers without a preflight); the UI's <code>cairn_ui</code> cookie (<code>HttpOnly; SameSite=Strict</code>, set on every page the server serves). Browsers without Fetch Metadata send nothing on an <code>&lt;img&gt;</code> or no-cors GET, so absence of headers is not enough here.</td><td><code>403</code> <code>{"error": "Same-origin proof required: use the Cairn UI or send an X-Cairn-Client header"}</code></td></tr>
+      <tr><td>5</td><td>Origin (writes)</td><td><code>POST</code>, <code>DELETE</code>, <code>PUT</code>, <code>PATCH</code></td><td>If an <code>Origin</code> header is present it must be an allowed origin: <code>http://&lt;Host&gt;</code>, <code>http://</code> + any allowed host from check 1, or the explicit <code>CAIRN_PUBLIC_URL</code>'s own origin (e.g. <code>https://…</code> behind a TLS proxy). An absent <code>Origin</code> is allowed (curl, CLI, MCP bridge).</td><td><code>403</code> <code>{"error": "Cross-origin request rejected"}</code></td></tr>
+      <tr><td>6</td><td>Sec-Fetch-Site (writes)</td><td><code>POST</code>, <code>DELETE</code>, <code>PUT</code>, <code>PATCH</code></td><td>Must not be <code>cross-site</code> (browsers set this header themselves).</td><td><code>403</code> <code>{"error": "Cross-site request rejected"}</code></td></tr>
+      <tr><td>7</td><td>Content-Type</td><td><code>POST</code>, <code>DELETE</code>, <code>PUT</code>, <code>PATCH</code></td><td>Media type <code>application/json</code> (parameters such as <code>; charset=utf-8</code> are allowed). A browser can only send this cross-origin after a CORS preflight, which Cairn never approves.</td><td><code>415 Unsupported Media Type</code></td></tr>
+      <tr><td>8</td><td>Body size</td><td>requests with a body</td><td>At most 1 MB (by <code>Content-Length</code> or by counting the stream). The body is drained so the client can read the 413; a client that keeps sending past 16 MB is disconnected.</td><td><code>413 Payload Too Large</code> (with <code>Connection: close</code>)</td></tr>
+      <tr><td>9</td><td>Body syntax</td><td>requests with a body</td><td>Valid JSON whose top level is an object (not an array or scalar).</td><td><code>400 Bad Request</code></td></tr>
+    </table></div>
+    <h3 id="limits">Server-side limits</h3>
+    <p>After routing, a few routes enforce capacity limits so one caller (or a runaway agent) cannot exhaust the machine. All limits are per server process.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Limit</th><th>Value</th><th>Applies to</th><th>When exceeded</th></tr>
+      <tr><td>Concurrent answers</td><td>4 (<code>MAX_CONCURRENT_ASKS</code>)</td><td><code>POST /api/ask</code> and <code>GET /api/ask/stream</code> together (each answer spawns a Claude CLI process)</td><td><code>429</code> <code>{"error": "Too many answers in progress (max 4); try again shortly"}</code>. On the stream route this is plain JSON, sent before the stream opens. The slot is released when the answer ends or the client disconnects.</td></tr>
+      <tr><td>Open SSE streams</td><td>64 (<code>MAX_SSE_CLIENTS</code>)</td><td><code>/api/ask/stream</code>, <code>/api/crawl/:id/events</code>, <code>/api/audit/stream</code> together</td><td>The 65th stream gets <code>503</code> <code>{"error": "Too many open event streams; try again later"}</code> with <code>Retry-After: 5</code>. A refused ask stream releases its answer slot without running.</td></tr>
+      <tr><td>Slow SSE consumer</td><td>1 MiB buffered (<code>MAX_BUFFERED_BYTES</code>)</td><td>every engine SSE stream</td><td>A client that stops reading is dropped (the socket is destroyed) once more than 1 MiB of events is queued for it. It may reconnect; audit entries carry SSE <code>id</code>s, so a client can fill the gap with <code>GET /api/audit?sinceId=&lt;last id&gt;</code> (the engine stream itself does not replay).</td></tr>
+      <tr><td>Request body</td><td>1 MB</td><td>all requests with a body</td><td><code>413</code> (see check 8)</td></tr>
+      <tr><td>Question length</td><td>4000 characters</td><td><code>/api/ask</code>, <code>/api/ask/stream</code></td><td><code>400</code></td></tr>
+    </table></div>
+    <p>Headers on every response: <code>X-Content-Type-Options: nosniff</code>, <code>Referrer-Policy: no-referrer</code>, <code>X-Frame-Options: DENY</code>, <code>Cross-Origin-Resource-Policy: same-origin</code>. HTML responses also carry</p>
+    <pre class="code"><code>Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+  object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  [; script-src 'self' 'sha256-…']   (only when the page has inline scripts, e.g. the docs' Mermaid bootstrap)</code></pre>
+    <p>Inline scripts are allowed by exact SHA-256 hash, never by <code>'unsafe-inline'</code>. No <code>Access-Control-Allow-*</code> headers are ever sent.</p>
+    <div class="callout warn"><strong>Do not expose the port.</strong> There is no authentication: anyone who can reach the socket can start crawls. Keep the default <code>127.0.0.1</code> binding; put an authenticating reverse proxy in front if you must share it.</div>
+
+    <h2 id="route-map">Route map</h2>
+    <div class="diagram-title">Figure 1 — Route map by group</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  S(("cairn serve<br/>127.0.0.1:8787"))
+  subgraph PG["Pages"]
+    P1["GET /"]
+    P2["GET /web/*"]
+    P3["GET /docs/*"]
+    P4["GET /bot"]
+    P5["GET /bot/*.json"]
+  end
+  subgraph ID["Identity"]
+    I1["GET /api/health"]
+    I2["GET /api/identity"]
+    I3["GET /.well-known/http-message-signatures-directory"]
+  end
+  subgraph SA["Search &amp; Ask"]
+    A1["GET|POST /api/search"]
+    A2["POST /api/ask"]
+    A3["GET /api/ask/stream (SSE)"]
+  end
+  subgraph CR["Crawl"]
+    C1["POST /api/crawl"]
+    C2["GET /api/crawl"]
+    C3["GET /api/crawl/:id"]
+    C4["POST /api/crawl/:id/cancel"]
+    C5["GET /api/crawl/:id/events (SSE)"]
+  end
+  subgraph FR["Fetch &amp; Robots"]
+    F1["POST /api/fetch"]
+    F2["POST /api/robots/check"]
+    F3["GET /api/robots/cache"]
+    F4["POST /api/robots/cache/clear"]
+  end
+  subgraph IX["Index"]
+    X1["GET /api/index"]
+    X2["GET /api/index/doc"]
+    X3["DELETE /api/index/doc"]
+    X4["POST /api/index/clear"]
+  end
+  subgraph AS["Audit &amp; Stats"]
+    U1["GET /api/audit"]
+    U2["GET /api/audit/stream (SSE)"]
+    U3["GET /api/stats"]
+  end
+  subgraph CF["Config"]
+    G1["GET /api/config"]
+    G2["POST /api/config"]
+  end
+  subgraph SG["Signatures"]
+    V1["POST /api/verify-signature"]
+    V2["POST /api/sign-preview"]
+  end
+  subgraph AST["Assistant"]
+    Z1["/api/assistant/*<br/>chat, runs, approvals, tasks,<br/>Mac actions, shopping, settings"]
+  end
+  S --> PG
+  S --> ID
+  S --> SA
+  S --> CR
+  S --> FR
+  S --> IX
+  S --> AS
+  S --> CF
+  S --> SG
+  S --> AST
+    </pre></div>
+    <p class="diagram-caption">Ten route groups on one loopback listener. Three engine routes and two assistant routes stream Server-Sent Events; everything else under <code>/api/</code> speaks JSON. The assistant routes are broken down in <a href="#assistant">Figure 3</a>.</p>
+
+    <h2 id="lifecycle">Request lifecycle</h2>
+    <div class="diagram-title">Figure 2 — What happens to a POST /api/fetch</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Caller<br/>UI, CLI, MCP bridge
+  participant G as Guards (app.js)
+  participant R as Router (api.js)
+  participant F as Fetcher
+  participant RB as RobotsCache
+  participant H as HostScheduler
+  participant W as Target site
+  participant AU as AuditLog
+  C->>G: POST /api/fetch<br/>Host, Content-Type, Origin, JSON body
+  alt Host is not an allowed loopback name with our port
+    G-->>C: 421 error JSON
+  else User-Agent carries a Cairn bot token
+    G-->>C: 403 loop guard
+  else Origin present and foreign, or Sec-Fetch-Site is cross-site
+    G-->>C: 403 error JSON
+  else not application/json
+    G-->>C: 415 error JSON
+  else body over 1 MB or not a JSON object
+    G-->>C: 413 or 400 error JSON
+  end
+  Note over G: all guards passed
+  G->>R: parsed body and query
+  R->>F: checkRobots(url, user)
+  F->>RB: check(url, Cairn-User)
+  RB-->>F: allowed, rule,<br/>matchedAgent
+  F-->>R: robots decision
+  R->>F: fetch(url, role user)
+  Note over F,RB: re-checked on every redirect hop
+  alt disallowed by robots.txt
+    F->>AU: record blocked robots
+    F-->>R: FetchResult<br/>blocked reason robots
+  else allowed
+    F->>H: schedule(host)
+    H->>W: GET with honest UA,<br/>From, Web Bot Auth headers
+    W-->>H: response
+    H-->>F: status, headers, body
+    F->>AU: record fetch entry
+    F-->>R: FetchResult
+  end
+  R->>R: extract HTML, optional index.add<br/>after CairnSearch robots and dedupe checks
+  R-->>C: 200 JSON with result, extracted, indexed, robots
+    </pre></div>
+    <p class="diagram-caption">Guards run before routing and short-circuit with an error JSON. Every network action, including a refusal, lands in the audit log.</p>
+
+    <!-- ============================== PAGES ============================== -->
+    <h2 id="pages">Pages</h2>
+    <p>Non-JSON routes that serve the UI, the documentation and the public site-owner material.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Method</th><th>Path</th><th>Returns</th><th>Errors</th></tr>
+      <tr><td><code>GET</code></td><td><code>/</code>, <code>/index.html</code></td><td><code>web/index.html</code> (the dashboard UI). If the UI is not installed, a small fallback page links to <code>/bot</code>, <code>/docs/</code> and <code>/api/health</code>.</td><td>—</td></tr>
+      <tr><td><code>GET</code></td><td><code>/web/*</code></td><td>Static files from <code>web/</code>. <code>/web</code> redirects (<code>301</code>) to <code>/web/</code>. Top-level asset names such as <code>/app.js</code> and <code>/styles.css</code> are also served from <code>web/</code> so the UI can use relative links.</td><td><code>404</code>, <code>400</code> malformed path</td></tr>
+      <tr><td><code>GET</code></td><td><code>/docs/</code>, <code>/docs/*</code></td><td>Static files from <code>docs/</code>; a directory serves its <code>index.html</code> (a directory URL without a trailing slash gets a <code>301</code>).</td><td><code>404</code>, <code>400</code> malformed path</td></tr>
+      <tr><td><code>GET</code></td><td><code>/bot</code>, <code>/bot/</code></td><td>HTML site-owner page: each role's token, full UA, purpose and robots behaviour, robots.txt examples, IP range links, Web Bot Auth key directory and keyid, verification steps, contact.</td><td>—</td></tr>
+      <tr><td><code>GET</code></td><td><code>/bot/cairnsearch.json</code><br><code>/bot/cairncorpus.json</code><br><code>/bot/cairn-user.json</code></td><td>Published egress IP ranges per role (JSON, OpenAI-style format). All three currently publish the same <code>config.identity</code> prefixes.</td><td><code>404</code> for other names</td></tr>
+    </table></div>
+    <p>Static serving refuses dotfiles, <code>..</code> segments, backslashes, NUL bytes and symlinks that resolve outside the served folder (all answer <code>404</code> or <code>400</code>). Any non-<code>GET</code>/<code>HEAD</code> method on a non-API path returns <code>405</code>.</p>
+    <pre class="code"><code>GET /bot/cairnsearch.json
+
+{
+  "creationTime": "2026-09-30T15:04:00.000Z",
+  "prefixes": [
+    { "ipv4Prefix": "127.0.0.1/32" },
+    { "ipv6Prefix": "::1/128" }
+  ]
+}</code></pre>
+
+    <!-- ============================== IDENTITY ============================== -->
+    <h2 id="identity">Identity</h2>
+
+    <h3 id="get-health"><code>GET /api/health</code></h3>
+    <p>Liveness plus Claude CLI availability (probed with <code>&lt;claudeBin&gt; --version</code>, cached 60 s). The UI header polls this.</p>
+    <p><strong>Params:</strong> none. <strong>Errors:</strong> none (Claude being unavailable is reported in <code>claude</code> with an <code>error</code> string, not as an HTTP error). <code>version</code> comes from <code>package.json</code>.</p>
+    <pre class="code"><code>{
+  "ok": true,
+  "name": "Cairn",
+  "version": "1.0.0",
+  "uptimeSec": 42,
+  "claude": { "available": true, "version": "2.1.3 (Claude Code)", "bin": "claude" }
+}</code></pre>
+
+    <h3 id="get-identity"><code>GET /api/identity</code></h3>
+    <p>Everything Cairn tells the world about itself: roles, exact User-Agent strings, the Web Bot Auth key id and where to verify it.</p>
+    <p><strong>Params:</strong> none. <strong>Errors:</strong> none.</p>
+    <pre class="code"><code>{
+  "roles": [
+    {
+      "id": "search",
+      "token": "CairnSearch",
+      "name": "Search indexer",
+      "purpose": "Discovers and indexes public pages so they can be surfaced, with citations, in Cairn answers.",
+      "trigger": "Automatic crawl jobs",
+      "respectsRobots": true,
+      "userAgent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; CairnSearch/1.0; +http://127.0.0.1:8787/bot",
+      "robotsTokens": ["CairnSearch", "Cairn"],
+      "ipRangesUrl": "http://127.0.0.1:8787/bot/cairnsearch.json"
+    },
+    { "id": "corpus", "token": "CairnCorpus", "robotsTokens": ["CairnCorpus", "Cairn"], "...": "..." },
+    { "id": "user", "token": "Cairn-User", "respectsRobots": true, "robotsTokens": ["Cairn-User", "Cairn"], "...": "..." }
+  ],
+  "familyToken": "Cairn",
+  "keyId": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+  "jwksUrl": "http://127.0.0.1:8787/.well-known/http-message-signatures-directory",
+  "botPageUrl": "http://127.0.0.1:8787/bot",
+  "contact": "cairn-operator@localhost",
+  "signingEnabled": true
+}</code></pre>
+    <p>For the <code>user</code> role, <code>respectsRobots</code> reflects the live <code>config.robots.respectForUserFetch</code> setting. <code>robotsTokens</code> is the robots.txt group-selection order (role token first, then the family token <code>Cairn</code>). All URLs are built from the current <code>publicBaseUrl</code>.</p>
+
+    <h3 id="get-jwks"><code>GET /.well-known/http-message-signatures-directory</code></h3>
+    <p>The Web Bot Auth key directory. Sites that receive a signed request fetch this URL (named in the <code>Signature-Agent</code> header) to verify it. Response <code>Content-Type: application/http-message-signatures-directory+json</code>, <code>Cache-Control: public, max-age=3600</code>.</p>
+    <pre class="code"><code>{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "kid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+      "use": "sig",
+      "alg": "EdDSA"
+    }
+  ]
+}</code></pre>
+
+    <!-- ============================== SEARCH & ASK ============================== -->
+    <h2 id="search-ask">Search &amp; Ask</h2>
+
+    <h3 id="search"><code>GET /api/search</code> · <code>POST /api/search</code></h3>
+    <p>BM25 keyword search over the local index. Same parameters in the query string (GET) or JSON body (POST).</p>
+    <div class="table-scroll"><table>
+      <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>q</code> or <code>query</code></td><td>string</td><td>—</td><td>Search terms (required).</td></tr>
+      <tr><td><code>limit</code></td><td>integer 1–100</td><td><code>10</code></td><td>Maximum results.</td></tr>
+      <tr><td><code>offset</code></td><td>integer ≥ 0</td><td><code>0</code></td><td>Pagination offset.</td></tr>
+      <tr><td><code>site</code></td><td>string</td><td>—</td><td>Restrict to one site (hostname without <code>www.</code>).</td></tr>
+    </table></div>
+    <pre class="code"><code>GET /api/search?q=ridgeback+weight&amp;limit=2
+
+{
+  "query": "ridgeback weight",
+  "total": 3,
+  "tookMs": 1.2,
+  "results": [
+    {
+      "url": "http://127.0.0.1:8788/products/ridgeback-45.html",
+      "title": "Ridgeback 45 Backpack — Northwind Trails",
+      "snippet": "The Ridgeback 45 weighs 1.2 kg, holds 45 L and costs $189 ...",
+      "score": 7.41,
+      "site": "127.0.0.1",
+      "fetchedAt": "2026-09-30T15:20:11.482Z"
+    }
+  ]
+}</code></pre>
+    <p><code>snippet</code> is <code>""</code> for pages marked <code>nosnippet</code>. <strong>Errors:</strong> <code>400</code> <code>{"error": "Missing search query (q)"}</code> when <code>q</code>/<code>query</code> is missing or blank.</p>
+
+    <h3 id="ask"><code>POST /api/ask</code></h3>
+    <p>Answers a question with citations and blocks until done. <code>quick</code> mode retrieves passages from the index and asks Claude (no tools) to answer only from them; if Claude is unavailable it falls back to an extractive answer. <code>deep</code> mode runs the Claude research agent, which uses Cairn's own robots-respecting fetcher through the MCP bridge.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>question</code></td><td>string, ≤ 4000 chars</td><td>—</td><td>Required (trimmed).</td></tr>
+      <tr><td><code>mode</code></td><td><code>"quick"</code> | <code>"deep"</code></td><td><code>"quick"</code></td><td>Retrieval-augmented answer or agentic research.</td></tr>
+      <tr><td><code>model</code></td><td>string</td><td><code>config.agent.model</code></td><td>Claude model alias or id, e.g. <code>haiku</code>, <code>sonnet</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>POST /api/ask
+{"question": "How much does the Ridgeback 45 weigh?", "mode": "quick"}
+
+{
+  "question": "How much does the Ridgeback 45 weigh?",
+  "answer": "The Ridgeback 45 weighs **1.2 kg** [1].",
+  "citations": [
+    { "n": 1, "url": "http://127.0.0.1:8788/products/ridgeback-45.html", "title": "Ridgeback 45 Backpack — Northwind Trails" }
+  ],
+  "usedClaude": true,
+  "mode": "quick",
+  "model": "sonnet",
+  "sessionId": "5b0c…",
+  "costUsd": 0.0031,
+  "elapsedMs": 4210,
+  "passages": [
+    { "n": 1, "url": "http://127.0.0.1:8788/products/ridgeback-45.html", "title": "Ridgeback 45 Backpack — Northwind Trails", "text": "...", "score": 6.9 }
+  ]
+}</code></pre>
+    <p>Degraded answers are still <code>200</code>: when the index has nothing relevant the answer says so and suggests a crawl (<code>"usedClaude": false</code>, <code>"note": "no-relevant-passages"</code>, no citations); when Claude is unavailable or fails, an extractive answer built from the top passages is returned with <code>"usedClaude": false</code> and the failure in <code>note</code>.</p>
+    <p>Deep mode returns <code>"mode": "deep"</code> and a <code>steps</code> array — <code>[{type: "tool"|"tool_result", name, input, summary, isError?, ts}]</code> — describing each tool call the agent made; <code>citations</code> lists only the sources the answer actually cites. If the Claude CLI is unavailable, deep mode falls back to a quick answer: <code>"mode": "deep"</code>, <code>"steps": []</code> and the reason in <code>note</code>.</p>
+    <p><strong>Errors:</strong> <code>400</code> missing or over-long <code>question</code>, or a <code>mode</code> other than <code>quick</code>/<code>deep</code>; <code>429</code> when 4 answers are already running (shared with <code>/api/ask/stream</code>, see <a href="#limits">limits</a>); <code>500</code> unexpected failure (generic message plus an error <code>id</code>).</p>
+
+    <h3 id="ask-stream"><code>GET /api/ask/stream?question=&amp;mode=&amp;model=</code></h3>
+    <p>Same as <code>POST /api/ask</code> but streamed as Server-Sent Events so the UI can show progress, retrieval, tool calls and partial text. It is a <code>GET</code> because <code>EventSource</code> can only issue GETs, so the write guards (Content-Type, JSON body) do not apply to it. Because it spends Claude budget it needs <strong>same-origin proof</strong> instead (<a href="#security">check 4</a>): the Cairn UI passes automatically (Fetch Metadata or its <code>cairn_ui</code> cookie), non-browser clients must send an <code>X-Cairn-Client</code> header (the CLI sends <code>X-Cairn-Client: cli</code>), and a bare <code>curl</code> without it gets <code>403</code>. In deep mode the agent may fetch pages as <code>Cairn-User</code> and start small <code>CairnSearch</code> crawls (≤ 25 pages, depth ≤ 2) through its MCP tools. Query parameters: <code>question</code> (or <code>q</code>), <code>mode</code> (<code>quick</code> default, or <code>deep</code>), <code>model</code>. Events: <code>status</code>, <code>retrieval</code>, <code>tool</code>, <code>tool_result</code>, <code>text</code>, <code>answer</code>, <code>error</code>, then <code>done</code>. Closing the connection aborts the run (including the Claude process). See the <a href="#sse">SSE catalogue</a>.</p>
+    <pre class="code"><code>retry: 3000
+
+event: status
+data: {"type":"status","message":"Starting quick answer…","mode":"quick"}
+
+event: status
+data: {"type":"status","message":"Searching the local index…"}
+
+event: retrieval
+data: {"type":"retrieval","passages":[{"n":1,"url":"http://127.0.0.1:8788/faq.html","title":"FAQ","score":5.2}],"sources":[{"n":1,"url":"http://127.0.0.1:8788/faq.html","title":"FAQ"}]}
+
+event: status
+data: {"type":"status","message":"Asking Claude (sonnet) with 1 source…"}
+
+event: text
+data: {"type":"text","text":"Returns are accepted within 60 days [1]."}
+
+event: answer
+data: {"question":"What is the return window?","answer":"Returns are accepted within 60 days [1].","citations":[{"n":1,"url":"http://127.0.0.1:8788/faq.html","title":"FAQ"}],"usedClaude":true,"mode":"quick"}
+
+event: done
+data: {}</code></pre>
+    <p><strong>Errors</strong> (as JSON, before the stream opens): <code>400</code> missing <code>question</code> or bad <code>mode</code>; <code>403</code> no same-origin proof, foreign <code>Origin</code>, <code>Sec-Fetch-Site: cross-site</code>/<code>same-site</code>, or a Cairn bot User-Agent; <code>429</code> 4 answers already running; <code>503</code> (<code>Retry-After: 5</code>) 64 SSE streams already open. Failures after the stream opens arrive as an <code>error</code> event followed by <code>done</code>. A client that stops reading is dropped once 1 MiB is buffered for it, which also aborts the run.</p>
+
+    <!-- ============================== CRAWL ============================== -->
+    <h2 id="crawl">Crawl</h2>
+
+    <h3 id="crawl-create"><code>POST /api/crawl</code></h3>
+    <p>Starts a crawl job immediately and returns <code>201</code>. The job fetches <code>robots.txt</code> first for every seed origin, seeds sitemaps, then walks links breadth-first. Politeness (crawl-delay, per-host concurrency, backoff) is enforced by the fetcher, not the job.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>seeds</code> or <code>url</code></td><td>string[] | string</td><td>—</td><td>Start URL(s), required. <code>seeds</code> may be an array or one string separated by spaces, commas or newlines; <code>url</code> is a single URL. Duplicates are dropped; at most 50 seeds.</td></tr>
+      <tr><td><code>role</code></td><td><code>"search"</code> | <code>"corpus"</code></td><td><code>"search"</code></td><td><code>search</code> adds pages to the index; <code>corpus</code> writes <code>data/corpus/&lt;jobId&gt;.jsonl</code> and does not touch the index.</td></tr>
+      <tr><td><code>maxPages</code></td><td>integer 1–10000</td><td><code>config.crawl.maxPages</code> (50)</td><td>Stop after this many fetched pages.</td></tr>
+      <tr><td><code>maxDepth</code></td><td>integer 0–20</td><td><code>config.crawl.maxDepth</code> (2)</td><td>Link depth from seeds (sitemap URLs count as depth 1, so sitemaps are only read when <code>maxDepth ≥ 1</code>).</td></tr>
+      <tr><td><code>sameSiteOnly</code></td><td>boolean</td><td><code>true</code></td><td>Only follow links on the seeds' sites.</td></tr>
+      <tr><td><code>useSitemaps</code></td><td>boolean</td><td><code>true</code></td><td>Read <code>Sitemap:</code> lines and <code>/sitemap.xml</code>.</td></tr>
+      <tr><td><code>concurrency</code></td><td>integer 1–32</td><td><code>config.crawl.concurrency</code> (4)</td><td>Parallel fetches within the job (per-host limits still apply).</td></tr>
+      <tr><td><code>includePatterns</code></td><td>string[] | string</td><td>—</td><td>Regexes (array, or one per line); if present a URL must match one.</td></tr>
+      <tr><td><code>excludePatterns</code></td><td>string[] | string</td><td>—</td><td>Regexes (array, or one per line); matching URLs are skipped.</td></tr>
+    </table></div>
+    <p>Out-of-range integers are clamped. Booleans also accept the strings <code>"false"</code>, <code>"0"</code>, <code>"no"</code> and <code>"off"</code>.</p>
+    <pre class="code"><code>POST /api/crawl
+{"url": "http://127.0.0.1:8788/", "role": "search", "maxPages": 40, "maxDepth": 3}
+
+201 Created
+{
+  "job": {
+    "id": "job-1-mfq3k2a1",
+    "state": "running",
+    "role": "search",
+    "seeds": ["http://127.0.0.1:8788/"],
+    "options": { "maxPages": 40, "maxDepth": 3, "sameSiteOnly": true, "useSitemaps": true, "concurrency": 4,
+                 "includePatterns": [], "excludePatterns": [] },
+    "startedAt": "2026-09-30T15:20:00.120Z",
+    "finishedAt": null,
+    "counts": { "discovered": 1, "queued": 1, "fetched": 0, "indexed": 0, "collected": 0,
+                "blockedRobots": 0, "noindex": 0, "duplicates": 0, "errors": 0, "skipped": 0 },
+    "inFlight": [],
+    "recent": [],
+    "error": null
+  }
+}</code></pre>
+    <p><strong>Errors:</strong> <code>400</code> no valid http(s) seed, more than 50 seeds, a role other than <code>search</code>/<code>corpus</code> (<code>user</code> is never a crawl role), or an include/exclude entry that is not a valid regular expression.</p>
+
+    <h3 id="crawl-list"><code>GET /api/crawl</code></h3>
+    <p>All jobs (newest first; the newest 50 are kept, running jobs are never evicted) as <code>{"jobs": [status, ...]}</code>.</p>
+
+    <h3 id="crawl-get"><code>GET /api/crawl/:id</code></h3>
+    <p>One job's status object (same shape as <code>job</code> above). <code>state</code> is one of <code>queued</code>, <code>running</code>, <code>done</code>, <code>cancelled</code>, <code>error</code>. <code>recent</code> holds the last 50 page outcomes:</p>
+    <pre class="code"><code>"recent": [
+  { "url": "http://127.0.0.1:8788/private/secret.html", "outcome": "blocked-robots", "status": null, "title": null, "depth": 1, "ts": "..." },
+  { "url": "http://127.0.0.1:8788/noindex.html", "outcome": "noindex", "status": 200, "title": "Noindex test", "depth": 1, "ts": "..." },
+  { "url": "http://127.0.0.1:8788/about.html", "outcome": "indexed", "status": 200, "title": "About Northwind Trails", "depth": 1, "ts": "..." }
+]</code></pre>
+    <p>Page outcomes: <code>indexed</code>, <code>collected</code>, <code>blocked-robots</code>, <code>noindex</code>, <code>duplicate</code>, <code>skipped-type</code>, <code>http-&lt;status&gt;</code>, <code>error</code>. <strong>Errors:</strong> <code>404</code> unknown id.</p>
+
+    <h3 id="crawl-cancel"><code>POST /api/crawl/:id/cancel</code></h3>
+    <p>Stops a job: nothing new is scheduled and in-flight requests are aborted. Returns <code>{"job": status}</code>; <code>state</code> becomes <code>cancelled</code> once the job has wound down (cancelling a finished job is a no-op). Send <code>{}</code> or no body, with <code>Content-Type: application/json</code>. <strong>Errors:</strong> <code>404</code> unknown id.</p>
+
+    <h3 id="crawl-events"><code>GET /api/crawl/:id/events</code></h3>
+    <p>SSE stream. It opens with one <code>state</code> event carrying the current status, then sends <code>page</code> events (one per URL outcome), a <code>state</code> event on each state change, and finally <code>done</code> with the final status, after which the server closes the stream. If the job has already finished, the opening <code>state</code> is followed immediately by <code>done</code>. <strong>Errors:</strong> <code>404</code> unknown id; <code>503</code> with <code>Retry-After: 5</code> when 64 SSE streams are already open (both JSON, before the stream opens).</p>
+
+    <!-- ============================== FETCH & ROBOTS ============================== -->
+    <h2 id="fetch-robots">Fetch &amp; Robots</h2>
+
+    <h3 id="fetch"><code>POST /api/fetch</code></h3>
+    <p>Fetches a single URL through the full compliant pipeline (robots check on every redirect hop, rate limiting, honest UA, Web Bot Auth signature, audit). Used by the Fetch inspector and the research agent's <code>fetch_page</code> tool.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>url</code></td><td>string</td><td>—</td><td>Required, http(s).</td></tr>
+      <tr><td><code>role</code></td><td><code>"search"</code> | <code>"corpus"</code> | <code>"user"</code></td><td><code>"user"</code></td><td>Identity to fetch as. <code>user</code> respects robots.txt unless <code>robots.respectForUserFetch</code> is turned off.</td></tr>
+      <tr><td><code>index</code></td><td>boolean</td><td><code>false</code></td><td>If true, and the fetch succeeded with HTML or text, try to add the page (under its final URL) to the search index. The index belongs to <code>CairnSearch</code>, so the page goes in only if <code>CairnSearch</code>'s robots.txt rules allow it as well as the fetching role's, it is not <code>noindex</code>, and it is not a duplicate — see <a href="#fetch-index">Indexing rules</a>. <code>corpus</code> fetches never feed search.</td></tr>
+    </table></div>
+    <pre class="code"><code>POST /api/fetch
+{"url": "http://127.0.0.1:8788/redirect", "role": "user"}
+
+{
+  "result": {
+    "ok": true,
+    "url": "http://127.0.0.1:8788/redirect",
+    "finalUrl": "http://127.0.0.1:8788/about.html",
+    "status": 200,
+    "headers": { "content-type": "text/html; charset=utf-8" },
+    "contentType": "text/html; charset=utf-8",
+    "bytes": 1834,
+    "truncated": false,
+    "elapsedMs": 12,
+    "redirects": [ { "from": "http://127.0.0.1:8788/redirect", "to": "http://127.0.0.1:8788/about.html", "status": 301 } ],
+    "blocked": null,
+    "error": null,
+    "role": "user",
+    "userAgent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +http://127.0.0.1:8787/bot",
+    "signed": true,
+    "xRobotsTag": { "noindex": false, "nofollow": false, "noarchive": false, "nosnippet": false }
+  },
+  "extracted": {
+    "title": "About Northwind Trails",
+    "description": "Outdoor gear from Boise, Idaho since 2011.",
+    "lang": "en",
+    "canonical": null,
+    "markdown": "# About Northwind Trails\n\nFounded in 2011 in Boise, Idaho ...",
+    "markdownTruncated": false,
+    "links": [ { "url": "http://127.0.0.1:8788/products/ridgeback-45.html", "text": "Ridgeback 45", "rel": "", "nofollow": false } ],
+    "linkCount": 9,
+    "metaRobots": { "noindex": false, "nofollow": false, "noarchive": false, "nosnippet": false },
+    "headings": [ { "level": 1, "text": "About Northwind Trails" } ],
+    "wordCount": 212
+  },
+  "indexed": null,
+  "robots": {
+    "allowed": true, "rule": null, "matchedAgent": "*",
+    "robotsUrl": "http://127.0.0.1:8788/robots.txt", "crawlDelay": null, "status": 200, "source": "cache",
+    "sitemaps": ["http://127.0.0.1:8788/sitemap.xml"], "fetchedAt": 1790781600120, "expiresAt": 1790868000120
+  }
+}</code></pre>
+    <p>The <code>body</code> is never returned; <code>extracted.markdown</code> is capped at 20 000 characters (<code>markdownTruncated</code> tells you) and <code>links</code> at 200 (<code>linkCount</code> is the full number). <code>extracted</code> is <code>null</code> unless the response was a successful HTML or <code>text/*</code> document. <code>robots</code> is the robots.txt decision for the requested URL (redirect hops are re-checked inside the fetch) — except when the fetch was blocked by robots, in which case it is the <strong>blocking hop's</strong> decision (see below), which may be for a redirect target on another origin.</p>
+    <p>When robots.txt disallows the URL (or a redirect hop), <code>result.ok</code> is <code>false</code>, <code>result.status</code> is <code>null</code> and <code>extracted</code> is <code>null</code> — the response is still <code>200</code> because the refusal is the answer. <code>result.blocked</code> carries the decision that caused the block:</p>
+    <pre class="code"><code>"blocked": {
+  "reason": "robots",
+  "detail": "Disallowed by http://127.0.0.1:8788/robots.txt (disallow: /private/)",
+  "rule": { "type": "disallow", "path": "/private/" },
+  "robots": {                                  // the blocking hop's decision (also returned as top-level "robots")
+    "url": "http://127.0.0.1:8788/private/secret.html",
+    "allowed": false, "rule": { "type": "disallow", "path": "/private/" }, "matchedAgent": "*",
+    "robotsUrl": "http://127.0.0.1:8788/robots.txt", "crawlDelay": null, "status": 200, "source": "cache",
+    "fetchedAt": 1790781600120, "expiresAt": 1790868000120, "note": null
+  }
+}</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th><code>blocked.reason</code></th><th>Cause</th><th>Notes</th></tr>
+      <tr><td><code>robots</code></td><td>A <code>Disallow</code> rule for the role, a synthetic disallow-all (robots.txt unreachable — <code>robots.note</code> explains), or a <code>Crawl-delay</code> above 300 s</td><td>For the crawl-delay case <code>rule</code> is <code>null</code>, <code>detail</code> reads <code>Crawl-delay of 600 s in … exceeds Cairn's maximum of 300 s; treated as disallowed</code> and <code>robots.crawlDelayLimit</code> is <code>300</code>. See <a href="robots.html#delay">robots.txt compliance</a>.</td></tr>
+      <tr><td><code>private-network</code></td><td>Only with <code>fetch.blockPrivateNetworks: true</code>: the first URL, a redirect target, or a name that resolves to a loopback, private, link-local, CGNAT, multicast or other reserved address</td><td>Checked before any request, including the robots.txt fetch. See <a href="security.html#ssrf">Security model</a>.</td></tr>
+      <tr><td><code>scheme</code></td><td>Not <code>http:</code>/<code>https:</code> (e.g. a redirect to <code>file:</code>)</td><td>—</td></tr>
+      <tr><td><code>invalid-url</code></td><td>Not an absolute URL</td><td>—</td></tr>
+    </table></div>
+    <h3 id="fetch-index"><code>POST /api/fetch</code> indexing rules (<code>index: true</code>)</h3>
+    <p><code>indexed</code> is <code>null</code> unless <code>index: true</code> was requested, content was extracted and the role is not <code>corpus</code>. The page is then judged the way a <code>CairnSearch</code> crawl would judge it, whatever role fetched it:</p>
+    <div class="table-scroll"><table>
+      <tr><th>Step</th><th>Check</th><th><code>indexed</code></th><th>Effect on an existing copy</th></tr>
+      <tr><td>1</td><td>robots.txt allows the final URL for the fetching role <em>and</em> for <code>CairnSearch</code></td><td><code>"blocked-robots"</code> if not</td><td>Removed when a real <code>CairnSearch</code> rule disallows it; kept when the block is synthetic (robots.txt unreachable) or only the fetching role is disallowed</td></tr>
+      <tr><td>2</td><td><code>noindex</code> addressed to <code>CairnSearch</code>, <code>Cairn</code> or all robots (meta <code>robots</code>/<code>CairnSearch</code>/<code>Cairn</code> or <code>X-Robots-Tag</code>)</td><td><code>"noindex"</code></td><td>Removed</td></tr>
+      <tr><td>3</td><td><code>noindex</code> addressed only to the fetching role (e.g. <code>Cairn-User</code>)</td><td><code>"noindex"</code></td><td>Kept</td></tr>
+      <tr><td>4</td><td><code>&lt;link rel="canonical"&gt;</code> points to a different URL that is already indexed</td><td><code>"duplicate"</code></td><td>—</td></tr>
+      <tr><td>5</td><td>Same SHA-256 content hash as another indexed URL (and this URL is not indexed yet)</td><td><code>"duplicate"</code></td><td>—</td></tr>
+      <tr><td>6</td><td>Otherwise <code>index.add</code>, recording <code>noarchive</code> and <code>nosnippet</code> from the union of <code>CairnSearch</code> and fetching-role directives</td><td><code>"added"</code>, <code>"updated"</code> or <code>"unchanged"</code></td><td>Replaced</td></tr>
+    </table></div>
+    <p><strong>Errors:</strong> <code>400</code> missing or non-http(s) <code>url</code>, or unknown <code>role</code>. Network and HTTP failures are reported inside <code>result</code> (<code>error</code>, <code>status</code>), not as HTTP errors.</p>
+
+    <h3 id="robots-check"><code>POST /api/robots/check</code></h3>
+    <p>Explains how robots.txt applies to a URL for every role. With <code>robotsTxt</code>, the supplied text is parsed locally and nothing is fetched (Robots tester). Without it, the live file is used via the robots cache.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>url</code></td><td>string</td><td>—</td><td>Required. An absolute http(s) URL; with <code>robotsTxt</code> a bare path such as <code>/private/x.html</code> also works.</td></tr>
+      <tr><td><code>role</code></td><td>string</td><td>—</td><td>Optional: that role's decision is listed first and drives the top-level <code>crawlDelay</code>, <code>source</code> and <code>status</code>. All three roles are always returned.</td></tr>
+      <tr><td><code>robotsTxt</code></td><td>string</td><td>—</td><td>Optional robots.txt text to test instead of fetching (ignored when blank).</td></tr>
+    </table></div>
+    <pre class="code"><code>POST /api/robots/check
+{"url": "http://127.0.0.1:8788/private/public-note.html"}
+
+{
+  "url": "http://127.0.0.1:8788/private/public-note.html",
+  "robotsUrl": "http://127.0.0.1:8788/robots.txt",
+  "decisions": [
+    { "role": "search", "token": "CairnSearch", "allowed": true,
+      "rule": { "type": "allow", "path": "/private/public-note.html" }, "matchedAgent": "CairnSearch", "crawlDelay": null },
+    { "role": "corpus", "token": "CairnCorpus", "allowed": false,
+      "rule": { "type": "disallow", "path": "/" }, "matchedAgent": "CairnCorpus", "crawlDelay": null },
+    { "role": "user", "token": "Cairn-User", "allowed": false,
+      "rule": { "type": "disallow", "path": "/private/" }, "matchedAgent": "*", "crawlDelay": null }
+  ],
+  "crawlDelay": null,
+  "sitemaps": ["http://127.0.0.1:8788/sitemap.xml"],
+  "source": "network",
+  "status": 200
+}</code></pre>
+    <p><code>matchedAgent</code> is the robots.txt group that decided (<code>*</code> when only the wildcard group applied, <code>null</code> when no group applied and everything is allowed). <code>source</code> is <code>network</code>, <code>cache</code>, <code>stale</code> (fetch failed, previous copy used) or <code>provided</code> (<code>robotsTxt</code> supplied — then <code>status</code> is <code>null</code>, and <code>robotsUrl</code> is <code>null</code> if <code>url</code> was a bare path). <code>status</code> is the HTTP status of the robots.txt fetch (<code>0</code> = network error or a refused robots.txt request, e.g. a private-network target). Decisions are the raw robots.txt result: a <code>crawlDelay</code> above 300 is reported as-is with <code>allowed: true</code>, but the fetcher refuses such URLs (<code>blocked.reason: "robots"</code>). <strong>Errors:</strong> <code>400</code> missing or invalid <code>url</code>, unknown <code>role</code>.</p>
+
+    <h3 id="robots-cache"><code>GET /api/robots/cache</code></h3>
+    <p>The robots cache, one entry per origin (at most 2000 origins; expired entries are evicted first, then the least recently refreshed). <code>expiresAt</code> reflects the <em>current</em> <code>robots.cacheTtlMs</code>, read at use time and capped at 24 h, so lowering the TTL shortens existing entries immediately.</p>
+    <pre class="code"><code>{
+  "entries": [
+    { "origin": "http://127.0.0.1:8788", "robotsUrl": "http://127.0.0.1:8788/robots.txt", "status": 200,
+      "fetchedAt": 1790781600120, "expiresAt": 1790868000120, "groups": 3,
+      "sitemaps": ["http://127.0.0.1:8788/sitemap.xml"], "stale": false, "expired": false }
+  ]
+}</code></pre>
+
+    <h3 id="robots-cache-clear"><code>POST /api/robots/cache/clear</code></h3>
+    <p>Drops every cached robots.txt so the next fetch re-reads it. Body <code>{}</code> (or empty). Returns <code>{"ok": true, "cleared": 1}</code> — the number of origins dropped.</p>
+
+    <!-- ============================== INDEX ============================== -->
+    <h2 id="index">Index</h2>
+
+    <h3 id="index-list"><code>GET /api/index?site=&amp;limit=&amp;offset=</code></h3>
+    <p>Index statistics plus a page of documents.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>site</code></td><td>string</td><td>—</td><td>Filter by site.</td></tr>
+      <tr><td><code>limit</code></td><td>integer 1–1000</td><td><code>50</code></td><td>Page size.</td></tr>
+      <tr><td><code>offset</code></td><td>integer ≥ 0</td><td><code>0</code></td><td>Page offset.</td></tr>
+    </table></div>
+    <pre class="code"><code>{
+  "stats": { "docs": 17, "passages": 41, "terms": 903,
+             "sites": [ { "site": "127.0.0.1", "docs": 17 } ], "lastUpdated": "2026-09-30T15:20:14.020Z" },
+  "total": 17,
+  "docs": [
+    { "url": "http://127.0.0.1:8788/about.html", "title": "About Northwind Trails", "site": "127.0.0.1",
+      "fetchedAt": "2026-09-30T15:20:03.118Z", "wordCount": 212, "role": "search" }
+  ]
+}</code></pre>
+
+    <h3 id="index-doc"><code>GET /api/index/doc?url=</code></h3>
+    <p>One stored document: <code>{url, title, description, text, markdown, headings, lang, site, fetchedAt, role, contentHash, canonical, noarchive, nosnippet, ...}</code>. The <code>url</code> is looked up as given and in normalised form. <strong>Errors:</strong> <code>400</code> missing <code>url</code>; <code>404</code> <code>{"error": "Not in index: …"}</code>.</p>
+
+    <h3 id="index-doc-delete"><code>DELETE /api/index/doc?url=</code></h3>
+    <p>Removes one document. The URL comes from the query string or, alternatively, a JSON body <code>{"url": "..."}</code>; the request needs <code>Content-Type: application/json</code> like every <code>DELETE</code>. Returns <code>{"ok": true, "removed": "http://127.0.0.1:8788/about.html"}</code> (the removed URL). <strong>Errors:</strong> <code>400</code> missing <code>url</code>; <code>404</code> not indexed.</p>
+
+    <h3 id="index-clear"><code>POST /api/index/clear</code></h3>
+    <p>Empties the index and persists the empty state. Body <code>{}</code> (or empty). Returns <code>{"ok": true, "removed": 17}</code> — the number of documents deleted.</p>
+
+    <!-- ============================== AUDIT & STATS ============================== -->
+    <h2 id="audit-stats">Audit &amp; Stats</h2>
+
+    <h3 id="audit"><code>GET /api/audit?limit=&amp;role=&amp;kind=&amp;host=</code></h3>
+    <p>Newest-first audit entries plus counters. Every HTTP attempt, robots.txt fetch, robots refusal, crawl event and agent run is recorded. The in-memory ring holds the latest 2000 entries; the full history is in <code>&lt;dataDir&gt;/audit.ndjson</code>.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>limit</code></td><td>integer 1–5000</td><td><code>100</code></td><td>Maximum entries.</td></tr>
+      <tr><td><code>role</code></td><td>string</td><td>—</td><td><code>search</code>, <code>corpus</code> or <code>user</code>.</td></tr>
+      <tr><td><code>kind</code></td><td>string</td><td>—</td><td><code>fetch</code>, <code>robots</code>, <code>crawl</code>, <code>agent</code>, <code>system</code>.</td></tr>
+      <tr><td><code>host</code></td><td>string</td><td>—</td><td>Filter by <code>host[:port]</code> of the entry's URL.</td></tr>
+      <tr><td><code>sinceId</code></td><td>integer</td><td>—</td><td>Only entries with an <code>id</code> greater than this (incremental polling).</td></tr>
+    </table></div>
+    <pre class="code"><code>{
+  "entries": [
+    {
+      "id": 57, "ts": "2026-09-30T15:20:05.402Z", "kind": "fetch",
+      "role": "search", "token": "CairnSearch", "method": "GET",
+      "url": "http://127.0.0.1:8788/private/secret.html", "finalUrl": null,
+      "status": null, "bytes": 0, "elapsedMs": 0,
+      "robots": "disallowed", "rule": { "type": "disallow", "path": "/private/" },
+      "blocked": "robots", "signed": false, "attempt": 0, "error": null
+    }
+  ],
+  "stats": { "total": 57, "byKind": { "fetch": 44, "robots": 1, "crawl": 12 },
+             "byRole": { "search": 45 }, "byStatus": { "200": 38, "301": 1, "429": 1 },
+             "blocked": 6, "errors": 0 }
+}</code></pre>
+
+    <h3 id="audit-stream"><code>GET /api/audit/stream</code></h3>
+    <p>SSE stream: one <code>entry</code> event per new audit record (data = the entry JSON, SSE <code>id</code> = the entry id). Optional <code>role</code> and <code>kind</code> query parameters filter the stream. It opens with a <code>: audit stream open</code> comment, sends heartbeat comments every 15 s and never ends on its own.</p>
+
+    <h3 id="stats"><code>GET /api/stats</code></h3>
+    <p>One-call dashboard snapshot. Used by the research agent's <code>index_stats</code> tool and <code>cairn stats</code>.</p>
+    <pre class="code"><code>{
+  "index": { "docs": 17, "passages": 41, "terms": 903, "sites": [ { "site": "127.0.0.1", "docs": 17 } ], "lastUpdated": "..." },
+  "audit": { "total": 57, "byKind": { "...": 0 }, "byRole": { "...": 0 }, "byStatus": { "...": 0 }, "blocked": 6, "errors": 0 },
+  "hosts": [ { "host": "127.0.0.1:8788", "inFlight": 0, "queued": 0, "requests": 45, "backoffMs": 0, "nextAllowedAt": 1790781605402 } ],
+  "jobs": [ { "id": "job-1-mfq3k2a1", "state": "done", "...": "..." } ],
+  "robotsCache": 1,
+  "uptimeSec": 311
+}</code></pre>
+
+    <!-- ============================== CONFIG ============================== -->
+    <h2 id="config">Config</h2>
+
+    <h3 id="config-get"><code>GET /api/config</code></h3>
+    <p>The editable subset of the configuration: <code>politeness</code>, <code>robots</code>, <code>crawl</code>, <code>agent</code>, <code>signing</code>, <code>fetch</code>, <code>contact</code>.</p>
+    <pre class="code"><code>{
+  "politeness": { "minDelayMs": 1000, "maxConcurrencyPerHost": 1, "globalConcurrency": 8, "backoffBaseMs": 2000, "maxBackoffMs": 60000 },
+  "robots": { "cacheTtlMs": 86400000, "respectForUserFetch": true },
+  "crawl": { "maxPages": 50, "maxDepth": 2, "sameSiteOnly": true, "useSitemaps": true, "concurrency": 4 },
+  "agent": { "claudeBin": "claude", "model": "sonnet", "timeoutMs": 240000, "maxBudgetUsd": 1.5, "maxPassages": 8 },
+  "signing": { "enabled": true },
+  "fetch": { "timeoutMs": 15000, "maxBytes": 5242880, "maxRedirects": 5, "retries": 2, "blockPrivateNetworks": false },
+  "contact": "cairn-operator@localhost"
+}</code></pre>
+
+    <h3 id="config-post"><code>POST /api/config</code></h3>
+    <p>Validates a partial object, deep-merges it into the live config (changes take effect immediately), persists the editable keys to <code>&lt;dataDir&gt;/config.json</code>, and returns the new subset. Validation is strict so a bad request can never corrupt <code>config.json</code>:</p>
+    <ul>
+      <li>top-level keys must be editable — <code>host</code>, <code>port</code>, <code>dataDir</code>, <code>identity</code>, <code>publicBaseUrl</code> ... are rejected;</li>
+      <li>nested keys must already exist (no new keys), and each value must match the current type: non-negative finite number, boolean, string (≤ 500 chars), object, or array of strings;</li>
+      <li>strings and string-array entries must not contain control characters (<code>U+0000</code>–<code>U+001F</code>, <code>U+007F</code>): a CR/LF in <code>contact</code> would otherwise break the <code>From</code>/<code>User-Agent</code> headers of every outgoing request;</li>
+      <li><code>robots.cacheTtlMs</code> may be at most <code>86400000</code> (24 h, RFC 9309 §2.4);</li>
+      <li>only own keys count: <code>__proto__</code>, <code>constructor</code> and <code>prototype</code> are rejected as unknown keys, and the merge into the live config (and the load of <code>config.json</code> at startup) skips them, so a crafted patch or file cannot pollute <code>Object.prototype</code>;</li>
+      <li><code>agent.claudeBin</code> can never be changed over HTTP (it names an executable) — use <code>CAIRN_CLAUDE_BIN</code>.</li>
+    </ul>
+    <pre class="code"><code>POST /api/config
+{"politeness": {"minDelayMs": 2000}, "agent": {"model": "haiku"}}
+
+{ "politeness": { "minDelayMs": 2000, "...": "..." }, "agent": { "model": "haiku", "...": "..." }, "...": "..." }</code></pre>
+    <p><strong>Errors:</strong> <code>400</code> with a precise message, e.g. <code>{"error": "Not editable: port"}</code>, <code>{"error": "Unknown config key: crawl.maxPagez"}</code>, <code>{"error": "politeness.minDelayMs must be a non-negative number"}</code>, <code>{"error": "contact must not contain control characters"}</code>, <code>{"error": "robots.cacheTtlMs must be at most 86400000"}</code>, <code>{"error": "Unknown config key: crawl.__proto__"}</code>, <code>{"error": "agent.claudeBin cannot be changed over HTTP (set CAIRN_CLAUDE_BIN instead)"}</code>.</p>
+
+    <!-- ============================== SIGNATURES ============================== -->
+    <h2 id="signatures">Signatures</h2>
+
+    <h3 id="verify-signature"><code>POST /api/verify-signature</code></h3>
+    <p>Checks a Web Bot Auth (RFC 9421, Ed25519) signature against Cairn's own key directory — handy for site owners testing their verifier. Body: <code>url</code> (absolute URL the request was sent to; its authority is part of the signature base), <code>headers</code> (object; names matched case-insensitively), optional <code>method</code> (default <code>GET</code>).</p>
+    <pre class="code"><code>POST /api/verify-signature
+{
+  "url": "http://127.0.0.1:8788/signed-only",
+  "headers": {
+    "Signature-Agent": "\"http://127.0.0.1:8787\"",
+    "Signature-Input": "sig1=(\"@authority\" \"signature-agent\");created=1790781600;expires=1790781900;keyid=\"poqk...\";alg=\"ed25519\";nonce=\"...\";tag=\"web-bot-auth\"",
+    "Signature": "sig1=:MEUCIQ...:"
+  }
+}
+
+{ "valid": true, "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U", "agent": "http://127.0.0.1:8787", "label": "sig1" }</code></pre>
+    <p>A failed verification is still <code>200</code>: <code>{"valid": false, "keyid": "...", "agent": "...", "reason": "signature expired"}</code>. Reasons include <code>missing Signature-Input or Signature header</code>, <code>malformed signature headers: …</code>, <code>no signature with tag="web-bot-auth"</code>, <code>signature does not cover @authority</code>, <code>signature does not cover signature-agent</code>, <code>unsupported alg …</code>, <code>missing created</code>, <code>created is in the future</code>, <code>signature expired</code>, <code>missing keyid</code>, <code>unknown keyid</code> and <code>signature mismatch</code>. <strong>Errors:</strong> <code>400</code> <code>url</code> not an absolute URL, or <code>headers</code> not an object.</p>
+
+    <h3 id="sign-preview"><code>POST /api/sign-preview</code></h3>
+    <p>Shows the exact request headers Cairn would send to a URL, including the signature, without sending anything. The Fetch inspector uses it.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>url</code></td><td>string</td><td>—</td><td>Required.</td></tr>
+      <tr><td><code>role</code></td><td>string</td><td><code>"user"</code></td><td>Which UA to preview.</td></tr>
+    </table></div>
+    <pre class="code"><code>POST /api/sign-preview
+{"url": "http://127.0.0.1:8788/signed-only", "role": "user"}
+
+{
+  "url": "http://127.0.0.1:8788/signed-only",
+  "role": "user",
+  "token": "Cairn-User",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +http://127.0.0.1:8787/bot",
+    "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,application/xml;q=0.8,*/*;q=0.5",
+    "Accept-Language": "en",
+    "From": "cairn-operator@localhost",
+    "Signature-Agent": "\"http://127.0.0.1:8787\"",
+    "Signature-Input": "sig1=(\"@authority\" \"signature-agent\");created=...;expires=...;keyid=\"...\";alg=\"ed25519\";nonce=\"...\";tag=\"web-bot-auth\"",
+    "Signature": "sig1=:...:"
+  },
+  "signed": true,
+  "keyId": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+  "jwksUrl": "http://127.0.0.1:8787/.well-known/http-message-signatures-directory"
+}</code></pre>
+    <p>When signing is disabled (<code>signing.enabled: false</code>) the three signature headers are absent and <code>signed</code> is <code>false</code>. Each call produces a fresh signature (new <code>created</code> and <code>nonce</code>). <strong>Errors:</strong> <code>400</code> missing or non-http(s) <code>url</code>, unknown <code>role</code>.</p>
+
+    <!-- ============================== ASSISTANT ============================== -->
+    <h2 id="assistant">Assistant</h2>
+    <p>Everything under <code>/api/assistant/</code> belongs to the desktop assistant (<code>src/assistant/routes.js</code>). The chat panel, the bubble app, the CLI assistant commands and the <code>assistant</code> MCP tool server all use these routes. They share the conventions above: JSON bodies with <code>Content-Type: application/json</code> on every <code>POST</code> and <code>DELETE</code> (415 otherwise), a matching <code>Origin</code> when one is sent (403), no cross-site <code>Sec-Fetch-Site</code> (403), a loopback or public-URL <code>Host</code> (421), bodies of at most 1 MB (413), <code>{"error": …}</code> on failure, and <code>405</code> with an <code>Allow</code> header for a known path with the wrong method. For how these pieces fit together, see <a href="assistant.html">Desktop assistant</a>.</p>
+
+    <div class="diagram-title">Figure 3 — Assistant route map</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  A(("/api/assistant"))
+  subgraph RUNS["Chat and runs"]
+    R1["POST /chat"]
+    R2["GET /runs"]
+    R3["GET /runs/:runId"]
+    R4["GET /runs/:runId/events (SSE)"]
+    R5["POST /runs/:runId/cancel"]
+  end
+  subgraph CONV["Conversations"]
+    C1["GET /conversations"]
+    C2["GET /conversations/:id"]
+    C3["DELETE /conversations/:id"]
+  end
+  subgraph APPR["Approvals"]
+    P1["GET /approvals"]
+    P2["POST /approvals"]
+    P3["GET /approvals/:id"]
+    P4["GET /approvals/:id/wait"]
+    P5["POST /approvals/:id"]
+  end
+  subgraph TASKS["Tasks"]
+    T1["GET /tasks"]
+    T2["POST /tasks"]
+    T3["POST /tasks/parse"]
+    T4["GET|POST|DELETE /tasks/:id"]
+    T5["POST /tasks/:id/run"]
+  end
+  subgraph MACX["Mac actions"]
+    M1["POST /notify"]
+    M2["POST /mac/reminder"]
+    M3["POST /mac/calendar"]
+    M4["POST /open"]
+    M5["POST /clipboard"]
+  end
+  subgraph SHOP["Shopping"]
+    S1["GET /shopping"]
+    S2["POST /shopping"]
+    S3["POST|DELETE /shopping/:id"]
+  end
+  subgraph SYS["Settings and status"]
+    G1["GET|POST /settings"]
+    G2["GET /events (SSE)"]
+    G3["GET /health"]
+  end
+  A --> RUNS
+  A --> CONV
+  A --> APPR
+  A --> TASKS
+  A --> MACX
+  A --> SHOP
+  A --> SYS
+    </pre></div>
+    <p class="diagram-caption">Seven groups. Two routes stream Server-Sent Events. <code>POST /approvals</code> and <code>GET /approvals/:id/wait</code> exist for the <code>approval_prompt</code> MCP tool, and the chat panel uses the rest.</p>
+
+    <h3 id="as-chat"><code>POST /api/assistant/chat</code></h3>
+    <p>Starts a <strong>background run</strong> and returns at once. The run keeps going if the client disconnects. A new conversation is created when <code>conversationId</code> is omitted, and its title is the first 60 characters of the message. When <code>maxConcurrentRuns</code> runs are already active (3 by default), the run starts in state <code>queued</code>.</p>
+    <p><strong>Body:</strong> <code>{message (required, ≤ 20 000 chars), conversationId?}</code>. <strong>Errors:</strong> <code>400</code> missing message, <code>404</code> unknown conversation.</p>
+    <pre class="code"><code>// 202 Accepted
+{ "runId": "run-mfq9x2k1-3f9a0c1e", "conversationId": "c-mfq9x2k1-8b2d44a0", "background": true }</code></pre>
+
+    <h3 id="as-runs"><code>GET /api/assistant/runs?limit=</code> · <code>GET /api/assistant/runs/:runId</code></h3>
+    <p>The list returns <code>{runs}</code>, newest first (<code>limit</code> 1–50, default 30). Each row is <code>{runId, conversationId, title, state, startedAt, finishedAt, lastEvent, costUsd}</code>. <code>state</code> is one of <code>queued</code>, <code>running</code>, <code>waiting_approval</code>, <code>done</code>, <code>error</code> or <code>cancelled</code>. The single-run route adds the buffered <code>events</code> array. The run object is also repeated under <code>run</code>. <strong>Errors:</strong> <code>404</code> unknown run.</p>
+
+    <h3 id="as-run-events"><code>GET /api/assistant/runs/:runId/events</code></h3>
+    <p>SSE stream for one run. It first replays every buffered event and then streams live ones. Event names are the event <code>type</code>, each carries an <code>id:</code> sequence number, and a reconnecting client that sends <code>Last-Event-ID</code> (or <code>?lastEventId=</code>) skips what it already has. The server closes the stream after <code>done</code>. See <a href="#as-sse">assistant SSE events</a>.</p>
+
+    <h3 id="as-cancel"><code>POST /api/assistant/runs/:runId/cancel</code></h3>
+    <p>Kills the run's <code>claude -p</code> process, or removes the run from the queue, and denies its pending approvals with "Run cancelled by the user". Returns <code>{ok}</code>. <strong>Errors:</strong> <code>404</code> unknown run.</p>
+
+    <h3 id="as-conversations"><code>GET /api/assistant/conversations</code> · <code>GET|DELETE /api/assistant/conversations/:id</code></h3>
+    <p>The list returns <code>{conversations: [{id, title, updatedAt, messageCount}]}</code>, newest first. <code>GET /:id</code> returns the full conversation <code>{id, title, createdAt, updatedAt, sessionId, allowAlways, messages}</code>, also repeated under <code>conversation</code>. <code>DELETE /:id</code> removes the file and returns <code>{ok:true}</code>. <strong>Errors:</strong> <code>404</code>.</p>
+
+    <h3 id="as-approvals"><code>GET /api/assistant/approvals?runId=</code></h3>
+    <p>Returns <code>{pending: [{id, toolName, input, conversationId, runId, createdAt, summary}]}</code>, optionally only for one run. <code>summary</code> is a one-line description such as <em>Run shell command: ls -la ~/Downloads</em>.</p>
+
+    <h3 id="as-approval-create"><code>POST /api/assistant/approvals</code></h3>
+    <p>Called by the <code>approval_prompt</code> permission tool, not by people. <strong>Body:</strong> <code>{toolName (or tool_name), input?, conversationId?, runId?}</code> → <code>{id}</code>. The run moves to <code>waiting_approval</code>, the global stream sends <code>approval</code>, and after a 250 ms grace period (so "Always allow" decisions stay silent) a "Cairn needs your approval" notification appears. Undecided approvals are denied after 5 minutes.</p>
+
+    <h3 id="as-approval-wait"><code>GET /api/assistant/approvals/:id</code> · <code>GET /api/assistant/approvals/:id/wait?timeout=</code></h3>
+    <p><code>GET /:id</code> returns <code>{approval}</code>. <code>/wait</code> is a long-poll of up to <code>timeout</code> seconds (0–60, default 60). It returns <code>{decided:true, decision:{allow, message?, always?, updatedInput?}}</code> as soon as someone decides, or <code>{decided:false}</code> when the time runs out. <strong>Errors:</strong> <code>404</code> unknown approval.</p>
+
+    <h3 id="as-approval-decide"><code>POST /api/assistant/approvals/:id</code></h3>
+    <p>Approve or deny. <strong>Body:</strong> <code>{allow: boolean, message?, always?: boolean, updatedInput?: object}</code>. With <code>allow</code> and <code>always</code>, the tool name is added to the conversation's <code>allowAlways</code> list, so later calls in that conversation run without asking. Returns <code>{ok:true}</code>, plus <code>alwaysAllowed: toolName</code> when that happened. <strong>Errors:</strong> <code>404</code> unknown, <code>409</code> already decided.</p>
+    <pre class="code"><code>curl -s -X POST http://127.0.0.1:8787/api/assistant/approvals/ap-mfq9x7d2-51c0e9aa \
+  -H 'Content-Type: application/json' -d '{"allow":true}'</code></pre>
+
+    <h3 id="as-tasks"><code>GET /api/assistant/tasks?includeDone=</code> · <code>POST /api/assistant/tasks</code></h3>
+    <p><code>GET</code> returns <code>{tasks}</code> sorted by <code>nextRunAt</code>. Finished and cancelled tasks are included only with <code>includeDone=1</code> (or <code>all=1</code>). A task is <code>{id, title, kind, prompt, notes, recurrence, status, createdAt, nextRunAt, lastRunAt, runs}</code>.</p>
+    <p><code>POST</code> creates a reminder or an agent task and returns <code>201 {task}</code>. <strong>Body:</strong> either <code>{title, when}</code> with an ISO 8601 time, or <code>{text}</code> in plain English, which is parsed with <code>parseWhen</code> ("in 10 minutes", "tomorrow at 9am", "every weekday at 8:30"). Optional: <code>kind</code> (<code>reminder</code> by default, or <code>agent</code>), <code>prompt</code> (what an agent task should do, defaults to the title), <code>notes</code>, and <code>recurrence {every: minute|hour|day|week|weekday, interval?, at?: "HH:MM", days?: ["mon", …]}</code>. With only a recurrence, the first occurrence is computed for you. <strong>Errors:</strong> <code>400</code> when no time can be worked out.</p>
+    <pre class="code"><code>curl -s -X POST http://127.0.0.1:8787/api/assistant/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"every weekday at 8:30 summarise my unread newsletters","kind":"agent"}'</code></pre>
+
+    <h3 id="as-task-parse"><code>POST /api/assistant/tasks/parse</code></h3>
+    <p>Dry run of the natural-language parser. <strong>Body:</strong> <code>{text}</code>. Returns <code>{ok:true, when, recurrence, title, parsed}</code>, or <code>{ok:false, parsed:null, error}</code> (still <code>200</code>) when no time is found.</p>
+
+    <h3 id="as-task-id"><code>GET|POST|DELETE /api/assistant/tasks/:id</code> · <code>POST /api/assistant/tasks/:id/run</code></h3>
+    <p><code>GET</code> returns <code>{task}</code>. <code>POST</code> is a partial update of <code>title</code>, <code>notes</code>, <code>prompt</code>, <code>when</code> and <code>recurrence</code>, and returns <code>{task}</code>. <code>DELETE</code> cancels the task and returns <code>{ok, task}</code>. <code>/run</code> fires it now, as if it were due, and returns <code>{ok, task}</code>. <strong>Errors:</strong> <code>404</code> unknown task, <code>400</code> invalid patch.</p>
+
+    <h3 id="as-mac"><code>POST /api/assistant/notify</code> · <code>/mac/reminder</code> · <code>/mac/calendar</code> · <code>/open</code> · <code>/clipboard</code></h3>
+    <p>Mac actions, proxied by the <code>assistant</code> MCP tools. They run <code>osascript</code>, <code>open</code>, <code>pbcopy</code> or <code>pbpaste</code> with <code>execFile</code>, never a shell. With <code>CAIRN_MAC_DRYRUN=1</code> nothing runs and the response has <code>{ok:true, dryRun:true, script}</code>. A failed action answers <code>502 {ok:false, error}</code>.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Route</th><th>Body</th><th>Effect</th></tr>
+      <tr><td><code>POST /notify</code></td><td><code>{title?, message, sound?}</code></td><td>macOS notification. Also broadcast as <code>notification</code>.</td></tr>
+      <tr><td><code>POST /mac/reminder</code></td><td><code>{title, due?, list?, notes?}</code></td><td>Adds an item to Reminders.app. <code>due</code> is ISO 8601.</td></tr>
+      <tr><td><code>POST /mac/calendar</code></td><td><code>{title, start, end?, calendar?, location?, notes?}</code></td><td>Adds an event to Calendar.app. <code>end</code> defaults to one hour after <code>start</code>.</td></tr>
+      <tr><td><code>POST /open</code></td><td><code>{url}</code> or <code>{app}</code></td><td>Opens an absolute http(s) URL in the default browser, or an app by name (<code>open -a</code>). Other schemes and names starting with <code>-</code> are rejected with <code>400</code>.</td></tr>
+      <tr><td><code>POST /clipboard</code></td><td><code>{op: "read"}</code> or <code>{op: "write", text}</code></td><td>Reads or writes the clipboard. The <code>clipboard_read</code> tool needs approval.</td></tr>
+    </table></div>
+
+    <h3 id="as-shopping"><code>GET|POST /api/assistant/shopping</code> · <code>POST|DELETE /api/assistant/shopping/:id</code></h3>
+    <p><code>GET</code> returns <code>{items}</code> (pass <code>includeDone=false</code> to hide ticked items). <code>POST</code> adds <code>{item (required), url?, price?, store?, notes?, quantity?}</code> and returns <code>{item}</code>. <code>POST /:id</code> is a partial update, which can also set <code>done</code>. <code>DELETE /:id</code> removes the item. Only absolute http(s) links are stored. Cairn never pays: the list holds links for you to check out yourself.</p>
+
+    <h3 id="as-settings"><code>GET|POST /api/assistant/settings</code></h3>
+    <p><code>GET</code> returns the settings at the top level, and again under <code>settings</code>, plus <code>defaults</code> and <code>engineModel</code>. <code>POST</code> takes a partial object (directly, or under <code>settings</code>), validates it, saves <code>assistant-settings.json</code> and broadcasts <code>settings_changed</code>.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Key</th><th>Default</th><th>Meaning</th></tr>
+      <tr><td><code>model</code></td><td><code>""</code> (engine default)</td><td>Model name or alias passed to <code>--model</code></td></tr>
+      <tr><td><code>maxBudgetUsd</code></td><td><code>2</code></td><td>Per-run <code>--max-budget-usd</code>, between 0 and 100</td></tr>
+      <tr><td><code>workDir</code></td><td>your home directory</td><td>Working directory of <code>claude -p</code>. It must exist.</td></tr>
+      <tr><td><code>allowBrowser</code></td><td><code>true</code></td><td>Adds the Playwright MCP server</td></tr>
+      <tr><td><code>autoApproveBrowser</code></td><td><code>false</code></td><td>Lets every Playwright tool run without approval</td></tr>
+      <tr><td><code>notifyWithMac</code></td><td><code>true</code></td><td>Sends macOS notifications at all</td></tr>
+      <tr><td><code>notifyOnComplete</code></td><td><code>true</code></td><td>Notifies when an interactive run finishes</td></tr>
+      <tr><td><code>maxConcurrentRuns</code></td><td><code>3</code></td><td>Runs allowed at once. The rest queue.</td></tr>
+    </table></div>
+
+    <h3 id="as-events"><code>GET /api/assistant/events</code></h3>
+    <p>The global SSE stream that the chat panel and native shell listen to. It starts with a <code>hello</code> event carrying <code>{pendingApprovals, runs}</code> (the last 10 runs) and never sends <code>done</code>. See the event list below.</p>
+
+    <h3 id="as-health"><code>GET /api/assistant/health</code></h3>
+    <p>Polled by <code>Cairn.app</code> every 3 seconds. The avatar's state comes from this response: <code>pendingApprovals &gt; 0</code> gives <em>attention</em>, <code>runningRuns &gt; 0</code> gives <em>working</em>, otherwise <em>idle</em>, and a failed request gives <em>offline</em>.</p>
+    <pre class="code"><code>{
+  "ok": true,
+  "claude": { "available": true, "version": "2.1.3 (Claude Code)", "bin": "claude" },
+  "scheduler": { "active": 2, "running": true },
+  "pendingApprovals": 1,
+  "runningRuns": 2,              // includes runs waiting for approval
+  "queuedRuns": 0,
+  "waitingApprovalRuns": 1,
+  "nextTaskAt": "2026-10-01T15:30:00.000Z",
+  "shoppingItems": 3,
+  "settings": { "notifyWithMac": true, "notifyOnComplete": true, "allowBrowser": true }
+}</code></pre>
+
+    <h3 id="as-sse">Assistant SSE events</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Stream</th><th>Event</th><th>Data</th></tr>
+      <tr><td rowspan="9"><code>/api/assistant/runs/:runId/events</code></td><td><code>status</code></td><td><code>{type, message}</code>: phase changes, for example the run was queued or Claude was spawned</td></tr>
+      <tr><td><code>text</code></td><td><code>{type, text}</code>: assistant text as it is produced</td></tr>
+      <tr><td><code>tool</code></td><td><code>{type, id, name, input}</code>: Claude called a tool</td></tr>
+      <tr><td><code>tool_result</code></td><td><code>{type, id, name, isError, summary}</code></td></tr>
+      <tr><td><code>approval</code></td><td><code>{type, approval}</code>: this run is waiting for you</td></tr>
+      <tr><td><code>approval_resolved</code></td><td><code>{type, id, allow}</code></td></tr>
+      <tr><td><code>result</code></td><td><code>{type, text, costUsd, durationMs, sessionId}</code></td></tr>
+      <tr><td><code>error</code></td><td><code>{type, message}</code></td></tr>
+      <tr><td><code>done</code></td><td><code>{type}</code>: always last. The server then closes the stream.</td></tr>
+      <tr><td rowspan="12"><code>/api/assistant/events</code></td><td><code>hello</code></td><td><code>{pendingApprovals, runs, at}</code> on connect</td></tr>
+      <tr><td><code>run_started</code> · <code>run_update</code> · <code>run_done</code></td><td><code>{run}</code> (a run row). <code>run_update</code> is sent on state changes and, at most once a second, on progress. <code>run_done</code> adds <code>text</code>.</td></tr>
+      <tr><td><code>approval</code></td><td><code>{approval}</code>: a new pending approval from any run</td></tr>
+      <tr><td><code>approval_resolved</code></td><td><code>{id, allow, reason, runId, conversationId}</code></td></tr>
+      <tr><td><code>reminder</code></td><td><code>{task}</code>: a reminder fired</td></tr>
+      <tr><td><code>task_started</code></td><td><code>{task}</code>: a scheduled agent task began</td></tr>
+      <tr><td><code>task_result</code></td><td><code>{task, text, ok, costUsd}</code></td></tr>
+      <tr><td><code>task_error</code></td><td><code>{task, message}</code></td></tr>
+      <tr><td><code>tasks_changed</code></td><td><code>{action, task}</code>: any add, update, cancel or firing</td></tr>
+      <tr><td><code>shopping_changed</code></td><td><code>{action, item | id}</code></td></tr>
+      <tr><td><code>settings_changed</code></td><td><code>{settings}</code></td></tr>
+      <tr><td><code>notification</code></td><td><code>{title, message}</code> from <code>POST /notify</code></td></tr>
+    </table></div>
+    <p>Every global event also carries <code>type</code> and an <code>at</code> timestamp. Both streams send a heartbeat comment every 15 seconds.</p>
+
+    <!-- ============================== SSE ============================== -->
+    <h2 id="sse">SSE event catalogue</h2>
+    <p>Streams use <code>Content-Type: text/event-stream; charset=utf-8</code> and <code>Cache-Control: no-cache, no-transform</code>. Each stream starts with <code>retry: 3000</code>; every message is an <code>event:</code> name plus one JSON <code>data:</code> line (audit entries also carry an <code>id:</code>); a <code>: heartbeat &lt;ISO time&gt;</code> comment is sent every 15 s. Clients should close the stream on <code>done</code> — the server closes its side, and a browser <code>EventSource</code> would otherwise reconnect and start over. At most 64 engine streams may be open at once (the next gets <code>503</code> JSON with <code>Retry-After: 5</code>), and a client with more than 1 MiB of unread events is disconnected.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Stream</th><th>Event</th><th>Data</th><th>When</th></tr>
+      <tr><td rowspan="8"><code>/api/ask/stream</code></td><td><code>status</code></td><td><code>{type, message, mode?, stage?}</code></td><td>Phase changes: started, searching the index, asking Claude, Claude CLI spawned, falling back to extractive / quick. Any other internal event type is also relayed as <code>status</code>.</td></tr>
+      <tr><td><code>retrieval</code></td><td><code>{type, passages:[{n,url,title,score}], sources:[{n,url,title}]}</code></td><td>Quick mode (and deep-mode fallback), after index retrieval; <code>n</code> is the citation number.</td></tr>
+      <tr><td><code>tool</code></td><td><code>{type, id, name, input}</code></td><td>Deep mode: the agent called an MCP tool (<code>name</code> without the <code>mcp__cairn__</code> prefix, e.g. <code>fetch_page</code>).</td></tr>
+      <tr><td><code>tool_result</code></td><td><code>{type, id, name, isError, summary}</code></td><td>Deep mode: a tool returned (robots refusals arrive here as normal results the agent must respect).</td></tr>
+      <tr><td><code>text</code></td><td><code>{type, text}</code></td><td>Assistant text as it is produced.</td></tr>
+      <tr><td><code>answer</code></td><td>Full result, same as <code>POST /api/ask</code></td><td>Once, at the end.</td></tr>
+      <tr><td><code>error</code></td><td><code>{error}</code></td><td>Failure after the stream opened.</td></tr>
+      <tr><td><code>done</code></td><td><code>{}</code></td><td>Always last; the server then closes the stream.</td></tr>
+      <tr><td rowspan="3"><code>/api/crawl/:id/events</code></td><td><code>state</code></td><td>Job status object</td><td>Once on connect (current status), then on every state change.</td></tr>
+      <tr><td><code>page</code></td><td><code>{jobId, url, outcome, status, title, depth}</code></td><td>Each URL outcome.</td></tr>
+      <tr><td><code>done</code></td><td>Final job status</td><td>Job finished, cancelled or failed; the server then closes the stream.</td></tr>
+      <tr><td><code>/api/assistant/runs/:runId/events</code>, <code>/api/assistant/events</code></td><td>see <a href="#as-sse">Assistant SSE events</a></td><td>—</td><td>Assistant runs and global assistant events.</td></tr>
+      <tr><td><code>/api/audit/stream?role=&amp;kind=</code></td><td><code>entry</code></td><td>Audit entry (<code>{id, ts, kind, role, url, status, robots, blocked, ...}</code>)</td><td>Each new audit record matching the filters. Never sends <code>done</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>// Browser: follow a crawl job
+const es = new EventSource(`/api/crawl/${jobId}/events`);
+es.addEventListener('page', (e) =&gt; console.log(JSON.parse(e.data).outcome));
+es.addEventListener('done', () =&gt; es.close());</code></pre>
+
+    <!-- ============================== ERRORS ============================== -->
+    <h2 id="errors">Error codes</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Status</th><th>Meaning in Cairn</th></tr>
+      <tr><td><code>400</code></td><td>Missing or invalid parameter, invalid JSON or non-object body, unknown role, invalid config patch, malformed URL path.</td></tr>
+      <tr><td><code>403</code></td><td>One of: a request to <code>/api/*</code> whose <code>User-Agent</code> carries <code>CairnSearch/</code>, <code>CairnCorpus/</code> or <code>Cairn-User/</code> plus a version (loop guard); a foreign <code>Origin</code>; <code>Sec-Fetch-Site: cross-site</code> (any method) or <code>same-site</code> (API reads); <code>GET /api/ask/stream</code> without same-origin proof (<code>X-Cairn-Client</code> header, <code>cairn_ui</code> cookie, or <code>Sec-Fetch-Site: same-origin</code>/<code>none</code>).</td></tr>
+      <tr><td><code>404</code></td><td>Unknown route, job id, document or static file.</td></tr>
+      <tr><td><code>405</code></td><td>Known <code>/api/</code> path with the wrong method (response has an <code>Allow</code> header), or a non-<code>GET</code> request to a page or static path.</td></tr>
+      <tr><td><code>409</code></td><td>Assistant: the approval was already decided.</td></tr>
+      <tr><td><code>413</code></td><td>JSON body larger than 1 MB (sent with <code>Connection: close</code>).</td></tr>
+      <tr><td><code>415</code></td><td><code>POST</code>/<code>DELETE</code> without <code>Content-Type: application/json</code>.</td></tr>
+      <tr><td><code>421</code></td><td><code>Host</code> header is not an allowed name (<code>127.0.0.1:&lt;port&gt;</code>, <code>localhost:&lt;port&gt;</code>, <code>[::1]:&lt;port&gt;</code>, the bind address, or the explicit public URL's host).</td></tr>
+      <tr><td><code>429</code></td><td>4 answers (<code>/api/ask</code> + <code>/api/ask/stream</code>) are already running.</td></tr>
+      <tr><td><code>500</code></td><td>Unexpected server error: <code>{"error": "Internal server error", "id": "&lt;12 hex chars&gt;"}</code>. The cause is only in the server log, under the same id. (A deliberate 500 such as deep mode without a running server keeps its message.)</td></tr>
+      <tr><td><code>501</code></td><td>Assistant: a feature the current build does not provide, such as run streaming or task updates.</td></tr>
+      <tr><td><code>502</code></td><td>Assistant: a macOS action (<code>osascript</code>, <code>open</code>, clipboard) failed. The body is <code>{ok:false, error}</code>.</td></tr>
+      <tr><td><code>503</code></td><td>64 engine SSE streams already open (<code>Retry-After: 5</code>), or the assistant is not enabled on this server.</td></tr>
+    </table></div>
+    <div class="callout">A robots.txt refusal is <em>not</em> an HTTP error: <code>/api/fetch</code> answers <code>200</code> with <code>result.blocked.reason = "robots"</code>, so callers (and the research agent) can explain the refusal instead of retrying.</div>
+
+    <!-- ============================== CURL ============================== -->
+    <h2 id="curl">curl cookbook</h2>
+    <pre class="code"><code># Health and identity
+curl -s http://127.0.0.1:8787/api/health
+curl -s http://127.0.0.1:8787/api/identity
+
+# Start a crawl, then follow it
+curl -s -X POST http://127.0.0.1:8787/api/crawl \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"http://127.0.0.1:8788/","maxPages":40}'
+curl -sN http://127.0.0.1:8787/api/crawl/job-1-mfq3k2a1/events
+
+# Search, then ask
+curl -s 'http://127.0.0.1:8787/api/search?q=return+window'
+curl -s -X POST http://127.0.0.1:8787/api/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"What is the return window?","mode":"quick"}'
+# The streaming variant needs same-origin proof: any X-Cairn-Client value
+curl -sN -H 'X-Cairn-Client: curl' 'http://127.0.0.1:8787/api/ask/stream?q=return+window&amp;mode=quick'
+
+# Would robots.txt let each role in?
+curl -s -X POST http://127.0.0.1:8787/api/robots/check \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"http://127.0.0.1:8788/private/secret.html"}'
+
+# Assistant: start a background run and follow it
+curl -s -X POST http://127.0.0.1:8787/api/assistant/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Find three quiet vacuums under $250 and compare them"}'
+curl -sN http://127.0.0.1:8787/api/assistant/runs/run-mfq9x2k1-3f9a0c1e/events
+curl -s http://127.0.0.1:8787/api/assistant/runs
+curl -s http://127.0.0.1:8787/api/assistant/approvals          # anything waiting for you?
+curl -s -X POST http://127.0.0.1:8787/api/assistant/tasks \
+  -H 'Content-Type: application/json' -d '{"text":"remind me to stretch in 20 minutes"}'
+curl -s http://127.0.0.1:8787/api/assistant/health
+
+# Guards in action
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.0.1:8787/api/health   # 421
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -d 'x' http://127.0.0.1:8787/api/index/clear        # 415
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -H 'Origin: https://evil.example' -d '{}' http://127.0.0.1:8787/api/index/clear                    # 403
+curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:8787/api/ask/stream?q=x'                 # 403 (no X-Cairn-Client)
+curl -s -o /dev/null -w '%{http_code}\n' -A 'compatible; CairnSearch/1.0' http://127.0.0.1:8787/api/stats  # 403 (loop guard)
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H 'Content-Type: application/json' \
+  http://127.0.0.1:8787/api/stats                                                                    # 405</code></pre>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

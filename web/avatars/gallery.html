@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No color-scheme on this page on purpose: if it differed from the avatar frames' scheme, Chrome
+     would paint an opaque backdrop behind every transparent avatar iframe. Theming is done by class. -->
+<title>Cairn avatar styles</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CradialGradient id='g' cx='35%25' cy='30%25'%3E%3Cstop offset='0' stop-color='%23bfe9ff'/%3E%3Cstop offset='.55' stop-color='%234a7dff'/%3E%3Cstop offset='1' stop-color='%236a3cff'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='32' r='26' fill='url(%23g)'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, "Helvetica Neue", sans-serif;
+    --size: 96px;
+    --hero: 160px;
+    --cell: 176px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  html { background: #0b0d22; }
+  html.light { background: #e7ecf6; }
+  body {
+    font: 14px/1.45 var(--font);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    transition: color 400ms ease;
+  }
+
+  /* ------------------------------------------------------------------ wallpapers */
+  .wall { position: fixed; inset: 0; z-index: -1; transition: opacity 600ms ease; }
+  .wall.dark {
+    background:
+      radial-gradient(60% 55% at 18% 12%, rgba(124, 77, 255, .55), transparent 70%),
+      radial-gradient(55% 60% at 88% 18%, rgba(34, 140, 255, .40), transparent 70%),
+      radial-gradient(70% 60% at 70% 100%, rgba(255, 92, 146, .28), transparent 70%),
+      radial-gradient(50% 50% at 10% 95%, rgba(0, 200, 190, .22), transparent 70%),
+      linear-gradient(160deg, #121433 0%, #0b0d22 55%, #070814 100%);
+  }
+  .wall.light {
+    background:
+      radial-gradient(60% 55% at 15% 10%, rgba(255, 196, 150, .70), transparent 70%),
+      radial-gradient(55% 60% at 90% 15%, rgba(160, 196, 255, .80), transparent 70%),
+      radial-gradient(70% 60% at 65% 105%, rgba(255, 170, 205, .55), transparent 70%),
+      radial-gradient(50% 50% at 5% 95%, rgba(170, 235, 220, .60), transparent 70%),
+      linear-gradient(160deg, #f6f1ea 0%, #e7ecf6 55%, #dce3f1 100%);
+    opacity: 0;
+  }
+  body.light .wall.light { opacity: 1; }
+
+  body { color: #eef0ff; }
+  body.light { color: #1b1f33; }
+
+  /* faux macOS menu bar, for a desktop feel */
+  .menubar {
+    position: sticky; top: 0; z-index: 5;
+    height: 28px; padding: 0 16px;
+    display: flex; align-items: center; gap: 18px;
+    font-size: 13px; font-weight: 500;
+    background: rgba(20, 22, 44, .38);
+    -webkit-backdrop-filter: saturate(160%) blur(18px); backdrop-filter: saturate(160%) blur(18px);
+    border-bottom: 1px solid rgba(255, 255, 255, .06);
+  }
+  body.light .menubar { background: rgba(255, 255, 255, .45); border-bottom-color: rgba(0, 0, 0, .06); }
+  .menubar b { font-weight: 700; }
+  .menubar .sp { flex: 1; }
+  .menubar .dim { opacity: .7; }
+
+  /* ------------------------------------------------------------------ layout */
+  main { max-width: 1320px; margin: 0 auto; padding: 36px 28px 64px; }
+
+  header.top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 20px 32px; margin-bottom: 28px; }
+  header.top .title { flex: 1 1 360px; }
+  h1 { margin: 0; font-size: 30px; line-height: 1.15; letter-spacing: -.02em; font-weight: 700; }
+  .lead { margin: 6px 0 0; opacity: .72; max-width: 640px; }
+
+  .glass {
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .12);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .08) inset, 0 20px 60px rgba(0, 0, 0, .28);
+    -webkit-backdrop-filter: saturate(150%) blur(24px); backdrop-filter: saturate(150%) blur(24px);
+    border-radius: 22px;
+  }
+  body.light .glass {
+    background: rgba(255, 255, 255, .38);
+    border-color: rgba(255, 255, 255, .7);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 20px 60px rgba(40, 50, 90, .14);
+  }
+
+  /* ------------------------------------------------------------------ controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; padding: 12px 16px; }
+  .ctl { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+  .ctl > span { opacity: .65; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: rgba(255, 255, 255, .08); }
+  body.light .seg { background: rgba(20, 30, 70, .07); }
+  .seg button, .step button {
+    font: 600 12px/1 var(--font); color: inherit; border: 0; cursor: pointer;
+    background: transparent; padding: 7px 11px; border-radius: 8px; transition: background 200ms ease, box-shadow 200ms ease;
+  }
+  .seg button[aria-pressed="true"] { background: rgba(255, 255, 255, .18); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+  body.light .seg button[aria-pressed="true"] { background: #fff; box-shadow: 0 1px 3px rgba(20, 30, 70, .18); }
+  .seg button:focus-visible, .step button:focus-visible { outline: 2px solid #6ea8ff; outline-offset: 1px; }
+  .step { display: inline-flex; align-items: center; border-radius: 10px; background: rgba(255, 255, 255, .08); padding: 3px; }
+  body.light .step { background: rgba(20, 30, 70, .07); }
+  .step button { width: 28px; padding: 7px 0; font-size: 14px; }
+  .step button:hover, .seg button:hover { background: rgba(255, 255, 255, .12); }
+  body.light .step button:hover, body.light .seg button[aria-pressed="false"]:hover { background: rgba(20, 30, 70, .06); }
+  .step output { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; font-size: 13px; }
+
+  /* ------------------------------------------------------------------ board */
+  .board { padding: 8px 8px 12px; overflow-x: auto; }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(210px, 1.25fr) repeat(5, minmax(var(--cell), 1fr));
+    min-width: calc(210px + 5 * var(--cell));
+  }
+  .colhead { padding: 14px 10px 6px; text-align: center; }
+  .colhead strong { display: block; font-size: 13px; letter-spacing: .01em; }
+  .colhead small { display: block; font-size: 11.5px; opacity: .6; line-height: 1.35; margin-top: 2px; }
+  .colhead .chip {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px;
+    box-shadow: 0 0 8px currentColor;
+  }
+
+  .row { display: contents; }
+  .row > * { border-top: 1px solid rgba(255, 255, 255, .08); }
+  body.light .row > * { border-top-color: rgba(20, 30, 70, .08); }
+
+  .style {
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    padding: 18px 12px 16px; gap: 6px;
+  }
+  .style h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  .style .file { font: 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace; opacity: .55; text-decoration: none; color: inherit; }
+  .style .file:hover { opacity: .9; text-decoration: underline; }
+  .badge-default {
+    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 999px; color: #0b1640;
+    background: linear-gradient(180deg, #e9f3ff, #b7d6ff);
+    box-shadow: 0 0 12px rgba(120, 170, 255, .45);
+  }
+  .hero { position: relative; width: var(--hero); height: var(--hero); margin: 2px 0 2px; }
+  .hero iframe { width: var(--hero); height: var(--hero); }
+  .hero-state {
+    font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; opacity: .7;
+    min-height: 16px; transition: opacity 250ms ease;
+  }
+  .hero-state.swap { opacity: 0; }
+
+  .cell { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px 6px; }
+  .stage {
+    width: calc(var(--size) + 24px); height: calc(var(--size) + 24px);
+    display: grid; place-items: center; border-radius: 20px;
+    transition: width 300ms ease, height 300ms ease, background 300ms ease;
+  }
+  .cell:hover .stage { background: rgba(255, 255, 255, .05); }
+  body.light .cell:hover .stage { background: rgba(255, 255, 255, .35); }
+
+  iframe { border: 0; display: block; background: transparent; color-scheme: normal; }
+  .stage iframe { width: var(--size); height: var(--size); transition: width 300ms ease, height 300ms ease; }
+
+  footer { margin-top: 18px; font-size: 12px; opacity: .6; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  footer code { font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wall, .stage, .stage iframe, .hero-state { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wall dark" aria-hidden="true"></div>
+<div class="wall light" aria-hidden="true"></div>
+
+<div class="menubar" aria-hidden="true">
+  <b>Cairn</b><span class="dim">File</span><span class="dim">View</span><span class="dim">Window</span>
+  <span class="sp"></span><span class="dim" id="clock"></span>
+</div>
+
+<main>
+  <header class="top">
+    <div class="title">
+      <h1>Avatar styles</h1>
+      <p class="lead">The floating desktop bubble in every state. Each preview is the real avatar file
+        in a transparent frame, exactly as the native window shows it. Hover a preview to see the lift.</p>
+    </div>
+    <div class="controls glass" role="group" aria-label="Preview settings">
+      <div class="ctl"><span>Desktop</span>
+        <div class="seg" id="theme">
+          <button type="button" data-v="dark" aria-pressed="true">Dark</button>
+          <button type="button" data-v="light" aria-pressed="false">Light</button>
+        </div>
+      </div>
+      <div class="ctl"><span>Size</span>
+        <div class="seg" id="size">
+          <button type="button" data-v="64" aria-pressed="false">64</button>
+          <button type="button" data-v="96" aria-pressed="true">96</button>
+          <button type="button" data-v="160" aria-pressed="false">160</button>
+        </div>
+      </div>
+      <div class="ctl"><span>Running</span>
+        <div class="step" data-k="running"><button type="button" aria-label="Fewer running">&minus;</button><output>2</output><button type="button" aria-label="More running">+</button></div>
+      </div>
+      <div class="ctl"><span>Approvals</span>
+        <div class="step" data-k="approvals"><button type="button" aria-label="Fewer approvals">&minus;</button><output>1</output><button type="button" aria-label="More approvals">+</button></div>
+      </div>
+    </div>
+  </header>
+
+  <section class="board glass" aria-label="Avatar styles by state">
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <footer>
+    <span>Styles and the default come from <code>web/avatars/index.json</code>.</span>
+    <span>Frames load <code>avatar-&lt;style&gt;.html#state=&hellip;&amp;running=&hellip;&amp;approvals=&hellip;</code>.</span>
+    <span>The left column cycles through the states to show the transitions.</span>
+  </footer>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var FALLBACK = {
+    default: 'aurora',
+    styles: [
+      { key: 'aurora', file: 'avatar-aurora.html', name: 'Aurora Orb' },
+      { key: 'dots', file: 'avatar-dots.html', name: 'Constellation Dots' },
+      { key: 'buddy', file: 'avatar-buddy.html', name: 'Buddy' }
+    ]
+  };
+  var STATES = [
+    { key: 'idle', label: 'Idle', note: 'calm breathing', color: '#8fb4ff' },
+    { key: 'working', label: 'Working', note: 'busy, progress orbit', color: '#4f9dff' },
+    { key: 'attention', label: 'Attention', note: 'approval or reminder', color: '#ff8a4c' },
+    { key: 'offline', label: 'Offline', note: 'server unreachable', color: '#9aa0aa' },
+    { key: 'listening', label: 'Listening', note: 'reserved for voice', color: '#5fe0ff' }
+  ];
+  var CYCLE = ['idle', 'working', 'attention', 'listening', 'offline'];
+
+  var counts = { running: 2, approvals: 1 };
+  var frames = [];   // { el, file, state }
+  var heroes = [];   // { el, file, label, i }
+
+  function hashFor(state) {
+    return '#state=' + state + '&running=' + counts.running + '&approvals=' + counts.approvals;
+  }
+  // Changing only the fragment triggers the avatar's hashchange handler, so there is no reload.
+  function point(f, state) { f.state = state; f.el.src = f.file + hashFor(state); }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function frame(file, state, title) {
+    var f = el('iframe');
+    f.setAttribute('title', title);
+    f.setAttribute('scrolling', 'no');
+    f.setAttribute('allowtransparency', 'true');
+    var rec = { el: f, file: file, state: state };
+    point(rec, state);
+    return rec;
+  }
+
+  function build(index) {
+    var grid = document.getElementById('grid');
+    grid.textContent = '';
+    frames = []; heroes = [];
+
+    grid.appendChild(el('div', 'colhead'));
+    STATES.forEach(function (s) {
+      var h = el('div', 'colhead');
+      var strong = el('strong');
+      var dot = el('span', 'chip'); dot.style.background = s.color; dot.style.color = s.color;
+      strong.appendChild(dot); strong.appendChild(document.createTextNode(s.label));
+      h.appendChild(strong); h.appendChild(el('small', null, s.note));
+      grid.appendChild(h);
+    });
+
+    index.styles.forEach(function (st, si) {
+      var row = el('div', 'row');
+      var head = el('div', 'style');
+      var h2 = el('h2', null, st.name);
+      if (st.key === index.default) h2.appendChild(el('span', 'badge-default', 'Default'));
+      head.appendChild(h2);
+      var link = el('a', 'file', st.file); link.href = st.file + '#state=idle'; link.target = '_blank'; link.rel = 'noopener';
+      head.appendChild(link);
+      var hero = el('div', 'hero');
+      var start = CYCLE[si % CYCLE.length];
+      var hf = frame(st.file, start, st.name + ' cycling through states');
+      hero.appendChild(hf.el);
+      head.appendChild(hero);
+      var label = el('div', 'hero-state', start);
+      head.appendChild(label);
+      heroes.push({ rec: hf, label: label, i: si % CYCLE.length });
+      row.appendChild(head);
+
+      STATES.forEach(function (s) {
+        var cell = el('div', 'cell');
+        var stage = el('div', 'stage');
+        var f = frame(st.file, s.key, st.name + ', ' + s.label);
+        frames.push(f);
+        stage.appendChild(f.el);
+        cell.appendChild(stage);
+        row.appendChild(cell);
+      });
+      grid.appendChild(row);
+    });
+  }
+
+  function refreshAll() {
+    frames.forEach(function (f) { point(f, f.state); });
+    heroes.forEach(function (h) { point(h.rec, h.rec.state); });
+  }
+
+  // ------------------------------------------------------------------ controls
+  function seg(id, onPick) {
+    var root = document.getElementById(id);
+    root.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      Array.prototype.forEach.call(root.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      onPick(b.getAttribute('data-v'));
+    });
+    return function select(v) {
+      Array.prototype.forEach.call(root.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', String(x.getAttribute('data-v') === v)); });
+    };
+  }
+  function store(k, v) { try { localStorage.setItem('cairn-gallery-' + k, v); } catch (e) { /* private mode */ } }
+  function load(k) { try { return localStorage.getItem('cairn-gallery-' + k); } catch (e) { return null; } }
+
+  function setTheme(v) {
+    document.body.classList.toggle('light', v === 'light');
+    document.documentElement.classList.toggle('light', v === 'light');
+    store('theme', v);
+  }
+  function setSize(v) {
+    var n = parseInt(v, 10) || 96;
+    document.documentElement.style.setProperty('--size', n + 'px');
+    document.documentElement.style.setProperty('--cell', Math.max(150, n + 36) + 'px');
+    store('size', String(n));
+  }
+  var selTheme = seg('theme', setTheme);
+  var selSize = seg('size', setSize);
+
+  Array.prototype.forEach.call(document.querySelectorAll('.step'), function (st) {
+    var k = st.getAttribute('data-k'), out = st.querySelector('output'), btns = st.querySelectorAll('button');
+    function apply(v) { counts[k] = Math.max(0, Math.min(12, v)); out.textContent = String(counts[k]); refreshAll(); }
+    btns[0].addEventListener('click', function () { apply(counts[k] - 1); });
+    btns[1].addEventListener('click', function () { apply(counts[k] + 1); });
+  });
+
+  var theme = load('theme') || (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  setTheme(theme); selTheme(theme);
+  var size = load('size') || '96';
+  setSize(size); selSize(String(parseInt(size, 10) || 96));
+
+  // ------------------------------------------------------------------ cycling heroes
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  setInterval(function () {
+    if (document.hidden) return;
+    heroes.forEach(function (h) {
+      h.i = (h.i + 1) % CYCLE.length;
+      var next = CYCLE[h.i];
+      point(h.rec, next);
+      if (reduce) { h.label.textContent = next; return; }
+      h.label.classList.add('swap');
+      setTimeout(function () { h.label.textContent = next; h.label.classList.remove('swap'); }, 200);
+    });
+  }, 2600);
+
+  // ------------------------------------------------------------------ menubar clock
+  function tick() {
+    var d = new Date();
+    document.getElementById('clock').textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) +
+      '  ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  tick(); setInterval(tick, 30000);
+
+  // ------------------------------------------------------------------ boot
+  build(FALLBACK);
+  // Over http the real index.json wins (file:// fetches are blocked, so the built-in list stays).
+  if (location.protocol !== 'file:' && window.fetch) {
+    fetch('index.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (idx) {
+      if (!idx || !Array.isArray(idx.styles) || !idx.styles.length) return;
+      var same = JSON.stringify(idx.styles) === JSON.stringify(FALLBACK.styles) && idx.default === FALLBACK.default;
+      if (!same) build(idx);
+    }).catch(function () { /* keep the built-in list */ });
+  }
+})();
+</script>
+</body>
+</html>

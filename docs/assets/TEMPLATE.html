@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PAGE TITLE — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>PAGE TITLE</h1>
+    <p class="lead">One-sentence summary of the page.</p>
+    <div class="toc"><strong>On this page</strong><ol><li><a href="#s1">Section</a></li></ol></div>
+
+    <h2 id="s1">Section</h2>
+    <p>Body text. Use <code>inline code</code>, <span class="badge good">Implemented</span> badges, tables, .cards/.card, .callout(.warn/.bad).</p>
+
+    <div class="diagram-title">Figure 1 — Example flow</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  A[Start] --> B{Decision} -->|yes| C[Done]
+    </pre></div>
+    <p class="diagram-caption">What the reader should take away from the figure.</p>
+
+    <pre class="code"><code>$ node bin/cairn.js help</code></pre>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Identity &amp; Web Bot Auth — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Identity &amp; Web Bot Auth</h1>
+    <p class="lead">How Cairn identifies itself on every request, from the User-Agent token to Ed25519 HTTP Message Signatures (Web Bot Auth), and how a site owner can check cryptographically that traffic really comes from Cairn.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#layers">Identity layers</a></li>
+      <li><a href="#headers">Header formats</a></li>
+      <li><a href="#example">Full worked example</a></li>
+      <li><a href="#keys">Key generation, storage and thumbprint</a></li>
+      <li><a href="#directory">The key directory (JWKS)</a></li>
+      <li><a href="#verify">Verification algorithm for site owners</a></li>
+      <li><a href="#programs">Verified-bot programs (Cloudflare-style)</a></li>
+      <li><a href="#limits">Limitations and draft status</a></li>
+    </ol></div>
+
+    <h2 id="layers">1. Identity layers</h2>
+    <p>Cairn never hides who it is. Each request carries several independent identity signals. They get harder to forge as you go down the list. The first four can be checked by anyone. The fifth is the only one that <em>proves</em> the request came from whoever holds the Cairn operator's private key.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>#</th><th>Layer</th><th>Where it appears</th><th>Example</th><th>Can be spoofed?</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><strong>User-Agent product token</strong></td><td><code>User-Agent</code> header</td><td><code>…; compatible; CairnSearch/1.0; +http://127.0.0.1:8787/bot</code></td><td><span class="badge bad">Trivially</span>: it is only a claim</td></tr>
+        <tr><td>2</td><td><strong>Info URL</strong></td><td>The <code>+URL</code> inside the UA. It points to <code>&lt;publicBaseUrl&gt;/bot</code>.</td><td><code>+http://127.0.0.1:8787/bot</code></td><td><span class="badge bad">Yes</span>, but it tells you where the operator's documentation and keys are</td></tr>
+        <tr><td>3</td><td><strong>From header</strong></td><td><code>From</code> header (RFC 9110 §10.1.2), from <code>config.contact</code></td><td><code>From: cairn-operator@localhost</code></td><td><span class="badge bad">Yes</span>. It is a contact address, not proof.</td></tr>
+        <tr><td>4</td><td><strong>Published egress IP ranges</strong></td><td><code>/bot/cairnsearch.json</code>, <code>/bot/cairncorpus.json</code>, <code>/bot/cairn-user.json</code></td><td><code>{"creationTime":"…","prefixes":[{"ipv4Prefix":"127.0.0.1/32"},{"ipv6Prefix":"::1/128"}]}</code></td><td><span class="badge warn">Hard</span>: needs control of the source IP, but shared or cloud egress weakens it</td></tr>
+        <tr><td>5</td><td><strong>Cryptographic signature</strong> (Web Bot Auth)</td><td><code>Signature-Agent</code>, <code>Signature-Input</code>, <code>Signature</code> headers</td><td>Ed25519 over <code>@authority</code> + <code>signature-agent</code></td><td><span class="badge good">No</span>, without the private key</td></tr>
+      </tbody>
+    </table></div>
+    <p>The three roles share one signing key (one operator, one identity). Each role has its own UA token and its own IP JSON file, just as OpenAI publishes <code>searchbot.json</code>, <code>gptbot.json</code> and <code>chatgpt-user.json</code>.</p>
+
+    <div class="diagram-title">Figure 1 — Identity layers on one request, weakest to strongest</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  R["Incoming request"] --> L1["1\. UA token<br/>CairnSearch/1.0"]
+  L1 --> L2["2\. Info URL<br/>+publicBaseUrl/bot"]
+  L2 --> L3["3\. From header<br/>operator contact"]
+  L3 --> L4["4\. Source IP in<br/>published /bot/*.json"]
+  L4 --> L5["5\. Ed25519 signature<br/>verified against key directory"]
+  L1 -.- W1["claim only"]
+  L4 -.- W2["network-level evidence"]
+  L5 -.- W3["cryptographic proof"]
+    </pre></div>
+    <p class="diagram-caption">A site that only needs "is this Cairn-shaped traffic?" can stop at layer 1. Allowlisting or granting extra access should require layer 4 or layer 5.</p>
+
+    <h2 id="headers">2. Header formats</h2>
+    <p>Cairn implements the IETF drafts <em>draft-meunier-web-bot-auth-architecture</em> (Web Bot Auth) and <em>draft-meunier-http-message-signatures-directory</em>, on top of <strong>RFC 9421</strong> HTTP Message Signatures, using Ed25519. <code>Signer.signRequest({method, url})</code> in <code>src/net/signing.js</code> returns three headers. The fetcher adds them to every outgoing request, including robots.txt requests, whenever <code>config.signing.enabled</code> is true (the default).</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Header</th><th>Format</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>Signature-Agent</code></td><td><code>"&lt;publicBaseUrl&gt;"</code>: a Structured Field <em>string</em> (RFC 8941), <strong>including the double quotes</strong></td><td>Tells the verifier where to find the key directory: <code>&lt;Signature-Agent&gt;/.well-known/http-message-signatures-directory</code></td></tr>
+        <tr><td><code>Signature-Input</code></td><td><code>sig1=("@authority" "signature-agent");created=&lt;s&gt;;expires=&lt;s+300&gt;;keyid="&lt;kid&gt;";alg="ed25519";nonce="&lt;b64&gt;";tag="web-bot-auth"</code></td><td>Label <code>sig1</code>. The covered components are the target authority and the Signature-Agent header. Signatures are valid for 5 minutes. <code>nonce</code> is fresh random bytes (base64) on every request.</td></tr>
+        <tr><td><code>Signature</code></td><td><code>sig1=:&lt;base64 Ed25519 signature&gt;:</code></td><td>An RFC 8941 byte sequence (<code>:…:</code>) holding a 64-byte signature</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Signature base (RFC 9421 §2.5)</h3>
+    <p>The bytes that get signed are three lines joined with <code>\n</code>, with <strong>no trailing newline</strong>:</p>
+    <pre class="code"><code>"@authority": &lt;host[:port], lowercased, default port omitted&gt;
+"signature-agent": "&lt;publicBaseUrl&gt;"
+"@signature-params": ("@authority" "signature-agent");created=…;expires=…;keyid="…";alg="ed25519";nonce="…";tag="web-bot-auth"</code></pre>
+    <p>The <code>signature-agent</code> line holds the header's raw field value, so the quotes are part of the signed bytes. The <code>@signature-params</code> line is exactly the <code>Signature-Input</code> value with the leading <code>sig1=</code> removed.</p>
+
+    <h2 id="example">3. Full worked example</h2>
+    <p>A <code>Cairn-User</code> fetch of the fixture's <code>/signed-only</code> page. The Cairn server runs at <code>http://127.0.0.1:8787</code> and the fixture at <code>127.0.0.1:8788</code>, and the request is made at <code>created = 1790755200</code> (2026-09-30T08:00:00Z). The key, thumbprint and signature below were generated with <code>node:crypto</code> and are consistent with each other: you can verify this signature with the public key shown.</p>
+    <h3>The request on the wire</h3>
+    <pre class="code"><code>GET /signed-only HTTP/1.1
+Host: 127.0.0.1:8788
+User-Agent: Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +http://127.0.0.1:8787/bot
+Accept: text/html,application/xhtml+xml,text/plain;q=0.9,application/xml;q=0.8,*/*;q=0.5
+Accept-Language: en
+From: cairn-operator@localhost
+Signature-Agent: "http://127.0.0.1:8787"
+Signature-Input: sig1=("@authority" "signature-agent");created=1790755200;expires=1790755500;keyid="MCgcQaRV4xOBEV4loQxk_rfuhtkSh1i1riOEkEsEkdo";alg="ed25519";nonce="+KfYnPvvAipqbITEqXXE1TyZUzUt76DBi82Z+ebjOsc=";tag="web-bot-auth"
+Signature: sig1=:V/NRBdVIU3exPwCbvUL2o6vUDuWYlZELakzpcpr6/S8PruyGvzhBdHx2oepMntp1WO86oAzORoWaD+f4fJbfCA==:</code></pre>
+    <h3>The signature base that was signed</h3>
+    <pre class="code"><code>"@authority": 127.0.0.1:8788
+"signature-agent": "http://127.0.0.1:8787"
+"@signature-params": ("@authority" "signature-agent");created=1790755200;expires=1790755500;keyid="MCgcQaRV4xOBEV4loQxk_rfuhtkSh1i1riOEkEsEkdo";alg="ed25519";nonce="+KfYnPvvAipqbITEqXXE1TyZUzUt76DBi82Z+ebjOsc=";tag="web-bot-auth"</code></pre>
+    <h3>The public key (JWK) and its thumbprint</h3>
+    <pre class="code"><code>JWK:           {"kty":"OKP","crv":"Ed25519","x":"RsH-tb-LjdKL_o1ECb7rdb-4kZKM2kS-UjskjJN0S3c"}
+RFC 7638 input: {"crv":"Ed25519","kty":"OKP","x":"RsH-tb-LjdKL_o1ECb7rdb-4kZKM2kS-UjskjJN0S3c"}
+SHA-256 → base64url (no padding) = keyid:
+               MCgcQaRV4xOBEV4loQxk_rfuhtkSh1i1riOEkEsEkdo</code></pre>
+
+    <div class="diagram-title">Figure 2 — Signing an outgoing request</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant F as Fetcher
+  participant SG as Signer
+  participant S as Site 127.0.0.1:8788
+  F->>SG: signRequest(GET, http://127.0.0.1:8788/signed-only)
+  SG->>SG: created = now, expires = created + 300<br/>nonce = 32 random bytes, base64
+  SG->>SG: build 3-line signature base<br/>@authority, signature-agent, @signature-params
+  SG->>SG: Ed25519 sign with ed25519-private.pem
+  SG-->>F: Signature-Agent, Signature-Input, Signature
+  F->>S: GET /signed-only with UA, From and the 3 signature headers
+  S-->>F: 200 verified true, keyid, agent
+  F->>F: audit entry signed = true
+    </pre></div>
+    <p class="diagram-caption">Signing is stateless and costs microseconds. A new nonce and timestamp make every request's signature unique. When <code>config.signing.enabled</code> is false, <code>signRequest</code> returns <code>{}</code> and the audit entry records <code>signed:false</code>.</p>
+
+    <h2 id="keys">4. Key generation, storage and thumbprint</h2>
+    <ul>
+      <li><strong>Generation.</strong> On the first <code>Signer.init()</code>, when no key exists, Cairn creates an Ed25519 key pair with <code>crypto.generateKeyPairSync('ed25519')</code>. There is no external tool and no npm dependency.</li>
+      <li><strong>Storage.</strong> Keys are stored in <code>&lt;dataDir&gt;/keys/</code>. The private key is <code>ed25519-private.pem</code> (PEM, file mode <strong>0600</strong>). The public key is <code>ed25519-public.pem</code> (PEM). Later runs load the same files, so the <code>keyid</code> stays the same across restarts.</li>
+      <li><strong>Key id.</strong> <code>signer.keyId</code> is the <strong>RFC 7638 JWK thumbprint</strong>. It is the SHA-256 of the canonical JSON of the required public members, in lexicographic order and without whitespace, <code>{"crv":"Ed25519","kty":"OKP","x":"&lt;base64url public key&gt;"}</code>, encoded as base64url without padding. Because verifiers can recompute it from the JWK, a directory cannot claim a <code>kid</code> that does not belong to its key.</li>
+      <li><strong>Rotation.</strong> Stop Cairn, move <code>ed25519-*.pem</code> out of the keys directory, and start again. A new pair and a new keyid are generated. The directory publishes only the current key, so old signatures stop verifying straight away.</li>
+      <li><strong>Inspection.</strong> <code>node bin/cairn.js keys</code> prints the JWKS and keyid. <code>GET /api/identity</code> returns <code>keyId</code> and <code>jwksUrl</code>. <code>POST /api/sign-preview</code> shows the exact headers that would be sent for a URL.</li>
+    </ul>
+    <pre class="code"><code>import crypto from 'node:crypto';
+
+export function jwkThumbprint(jwk) {
+  // RFC 7638 §3.2: only the required members for kty "OKP", in lexicographic order.
+  const canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x });
+  return crypto.createHash('sha256').update(canonical).digest('base64url');
+}</code></pre>
+
+    <div class="diagram-title">Figure 3 — Key lifecycle</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A["Signer.init()"] --> B{"keys/ed25519-private.pem exists"}
+  B -->|yes| C["Load private and public PEM"]
+  B -->|no| D["generateKeyPairSync ed25519"]
+  D --> E["Write private PEM, mode 0600<br/>Write public PEM"]
+  E --> C
+  C --> F["Export public JWK: kty OKP, crv Ed25519, x"]
+  F --> G["keyId = base64url SHA-256 of<br/>canonical crv, kty, x"]
+  G --> H["jwks: keys with kid, use sig, alg EdDSA"]
+  H --> I["Served at /.well-known/<br/>http-message-signatures-directory"]
+  G --> J["Used as keyid in every Signature-Input"]
+    </pre></div>
+    <p class="diagram-caption">One key per Cairn installation. The same thumbprint appears in the directory's <code>kid</code> and in the <code>keyid</code> parameter of each signature.</p>
+
+    <h2 id="directory">5. The key directory (JWKS)</h2>
+    <p>The Cairn server publishes its public key at a well-known path under the <code>Signature-Agent</code> origin:</p>
+    <pre class="code"><code>GET /.well-known/http-message-signatures-directory HTTP/1.1
+Host: 127.0.0.1:8787
+
+HTTP/1.1 200 OK
+Content-Type: application/http-message-signatures-directory+json
+
+{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "RsH-tb-LjdKL_o1ECb7rdb-4kZKM2kS-UjskjJN0S3c",
+      "kid": "MCgcQaRV4xOBEV4loQxk_rfuhtkSh1i1riOEkEsEkdo",
+      "use": "sig",
+      "alg": "EdDSA"
+    }
+  ]
+}</code></pre>
+    <p>The same URL is linked from the <code>/bot</code> page and from <code>GET /api/identity</code> (<code>jwksUrl</code>). The <code>alg</code> member uses the JOSE name <code>EdDSA</code>. The <code>alg</code> parameter in <code>Signature-Input</code> uses the RFC 9421 registry name <code>ed25519</code>. Both names refer to the same algorithm.</p>
+
+    <h2 id="verify">6. Verification algorithm for site owners</h2>
+    <p>This is what the fixture's <code>/signed-only</code> route and Cairn's own <code>verifyRequest(...)</code> do (<code>POST /api/verify-signature</code> exposes it). Any site can do the same with a few dozen lines of code.</p>
+    <ol>
+      <li><strong>Require the headers.</strong> <code>Signature-Input</code>, <code>Signature</code> and <code>Signature-Agent</code> must all be present. If they are not, treat the request as unsigned. That is not an error, only unverified.</li>
+      <li><strong>Pick the Web Bot Auth signature.</strong> Parse <code>Signature-Input</code> as an RFC 8941 dictionary and select the label whose parameters include <code>tag="web-bot-auth"</code> (Cairn uses <code>sig1</code>).</li>
+      <li><strong>Check coverage.</strong> The component list must include <code>"@authority"</code>, and <code>"signature-agent"</code> whenever that header is present. Otherwise an attacker could swap the directory URL.</li>
+      <li><strong>Check the time window.</strong> Require <code>created ≤ now + skew</code> (allow about 60 s of clock skew) and <code>now &lt; expires</code>. Reject lifetimes longer than your policy allows (Cairn sends 300 s).</li>
+      <li><strong>Decide whether you trust the agent.</strong> Parse <code>Signature-Agent</code> (remove the SF-string quotes). Compare it with your allowlist of operators you recognise, and in production require <code>https</code>.</li>
+      <li><strong>Fetch the directory.</strong> <code>GET &lt;agent&gt;/.well-known/http-message-signatures-directory</code>. Cache it, respecting HTTP caching, so you do not fetch it for every request.</li>
+      <li><strong>Find the key.</strong> Pick the JWK with <code>kty=OKP</code>, <code>crv=Ed25519</code> whose <strong>recomputed</strong> RFC 7638 thumbprint equals <code>keyid</code>.</li>
+      <li><strong>Rebuild the signature base</strong> from the request you actually received: <code>@authority</code> from your own view of the Host, lowercased and without the default port, the raw <code>Signature-Agent</code> value, and <code>@signature-params</code>.</li>
+      <li><strong>Verify</strong> the Ed25519 signature from the <code>Signature</code> header (<code>sig1=:…:</code>, base64) over the base bytes.</li>
+      <li><strong>Optional: prevent replay.</strong> Remember <code>(keyid, nonce)</code> pairs until <code>expires</code> and reject any repeat.</li>
+      <li><strong>Combine</strong> with the other layers: the UA token should match the role, and the source IP should appear in the role's <code>/bot/*.json</code>.</li>
+    </ol>
+
+    <div class="diagram-title">Figure 4 — Verification sequence at the site</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Cairn Fetcher
+  participant S as Site verifier
+  participant K as Cairn key directory
+  C->>S: GET /page with Signature-Agent, Signature-Input, Signature
+  S->>S: parse Signature-Input, select tag web-bot-auth
+  S->>S: check components, created and expires window
+  S->>S: Signature-Agent on allowlist?
+  alt directory not cached
+    S->>K: GET /.well-known/http-message-signatures-directory
+    K-->>S: 200 JWKS, keys with kid
+    S->>S: cache JWKS
+  end
+  S->>S: find JWK whose RFC 7638 thumbprint equals keyid
+  S->>S: rebuild signature base and verify Ed25519
+  alt valid
+    S-->>C: 200, treat as verified Cairn
+  else invalid, expired or unknown key
+    S-->>C: 401 or treat as ordinary unverified traffic
+  end
+    </pre></div>
+    <p class="diagram-caption">The key-directory fetch happens once per cache period, not once per request. Everything else is local CPU work.</p>
+
+    <h3>Reference verifier (Node.js, zero dependencies)</h3>
+    <pre class="code"><code>import crypto from 'node:crypto';
+import { jwkThumbprint } from './thumbprint.js';     // the function from section 4
+
+const directoryCache = new Map();                    // agent URL -&gt; { jwks, expiresAt }
+
+async function loadDirectory(agent) {
+  const hit = directoryCache.get(agent);
+  if (hit &amp;&amp; hit.expiresAt &gt; Date.now()) return hit.jwks;
+  const res = await fetch(new URL('/.well-known/http-message-signatures-directory', agent));
+  if (!res.ok) throw new Error(`directory HTTP ${res.status}`);
+  const jwks = await res.json();
+  directoryCache.set(agent, { jwks, expiresAt: Date.now() + 3600_000 });
+  return jwks;
+}
+
+// headers: lowercase-keyed; authority: the Host you served, e.g. "127.0.0.1:8788".
+// Simplified: handles a single signature label, which is what Cairn sends.
+export async function verifyWebBotAuth({ headers, authority }, { now = Date.now() / 1000, trustedAgents = [] } = {}) {
+  const input = headers['signature-input'], sigHeader = headers['signature'], agentField = headers['signature-agent'];
+  if (!input || !sigHeader || !agentField) return { valid: false, reason: 'unsigned' };
+
+  const m = /^([A-Za-z0-9_-]+)=\(([^)]*)\)(.*)$/.exec(input);
+  if (!m) return { valid: false, reason: 'malformed Signature-Input' };
+  const [, label, list, paramText] = m;
+  const components = [...list.matchAll(/"([^"]+)"/g)].map((x) =&gt; x[1]);
+  const params = Object.fromEntries([...paramText.matchAll(/;([a-z]+)=(?:"([^"]*)"|(\d+))/g)]
+    .map((x) =&gt; [x[1], x[2] ?? Number(x[3])]));
+
+  if (params.tag !== 'web-bot-auth') return { valid: false, reason: 'not a web-bot-auth signature' };
+  if (!components.includes('@authority') || !components.includes('signature-agent')) return { valid: false, reason: 'insufficient coverage' };
+  if (!(params.created &lt;= now + 60 &amp;&amp; now &lt; params.expires)) return { valid: false, reason: 'outside validity window' };
+
+  const agent = agentField.replace(/^"|"$/g, '');
+  if (trustedAgents.length &amp;&amp; !trustedAgents.includes(agent)) return { valid: false, reason: 'untrusted agent' };
+  const jwk = (await loadDirectory(agent)).keys
+    .find((k) =&gt; k.kty === 'OKP' &amp;&amp; k.crv === 'Ed25519' &amp;&amp; jwkThumbprint(k) === params.keyid);
+  if (!jwk) return { valid: false, reason: 'unknown keyid' };
+
+  const base = [
+    ...components.map((c) =&gt; (c === '@authority' ? `"@authority": ${authority.toLowerCase()}` : `"${c}": ${headers[c]}`)),
+    `"@signature-params": ${input.slice(label.length + 1)}`,
+  ].join('\n');
+  const sig = new RegExp(`(?:^|,\\s*)${label}=:([^:]+):`).exec(sigHeader)?.[1];
+  if (!sig) return { valid: false, reason: 'missing signature value' };
+
+  const key = crypto.createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: jwk.x }, format: 'jwk' });
+  const valid = crypto.verify(null, Buffer.from(base), key, Buffer.from(sig, 'base64'));
+  return valid ? { valid: true, keyid: params.keyid, agent } : { valid: false, reason: 'bad signature' };
+}</code></pre>
+    <div class="callout">To try it locally, <code>POST /api/verify-signature</code> with <code>{"url": "...", "headers": {...}}</code> verifies a header set against this installation's JWKS. The Fetch inspector in the web UI shows the headers that were sent for any fetch.</div>
+
+    <h2 id="programs">7. Verified-bot programs (Cloudflare-style)</h2>
+    <p>Most site owners will not verify signatures themselves. CDNs and bot-management vendors, with Cloudflare the most visible, run <em>verified bot</em> or <em>signed agent</em> programs that do it at the edge:</p>
+    <ol>
+      <li><strong>Registration.</strong> The bot operator submits its details to the program: name, purpose, UA token, documentation URL (Cairn's <code>/bot</code> page) and the key directory URL (<code>/.well-known/http-message-signatures-directory</code>). The directory must be reachable on the public internet over HTTPS.</li>
+      <li><strong>Edge verification.</strong> For every request that carries <code>Signature-Agent</code>, the CDN fetches and caches the directory, verifies the signature as in section 6, and sets a "verified bot" attribute on the request.</li>
+      <li><strong>Customer policy.</strong> Site owners write rules against that attribute rather than against a spoofable UA string. For example: allow verified CairnSearch, challenge unverified traffic claiming to be Cairn, or rate-limit a category of bots.</li>
+      <li><strong>Revocation.</strong> If a key leaks, the operator rotates it, the directory changes, and the edge stops trusting the old keyid once its cached copy expires.</li>
+    </ol>
+    <div class="diagram-title">Figure 5 — Verified-bot program at a CDN edge</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  OP["Cairn operator"] -->|"registers /bot page<br/>and key directory URL"| PR["Verified-bot program"]
+  CF["Cairn Fetcher"] -->|"signed GET"| EDGE["CDN edge"]
+  EDGE -->|"fetch and cache JWKS"| DIR["publicBaseUrl/.well-known/<br/>http-message-signatures-directory"]
+  PR -.->|"agent is known"| EDGE
+  EDGE --> DEC{"Signature valid<br/>and agent registered"}
+  DEC -->|yes| TAG["Mark as verified bot<br/>apply site owner rules"]
+  DEC -->|no| UNV["Treat as unverified<br/>challenge, block or rate-limit"]
+  TAG --> ORG["Origin server"]
+    </pre></div>
+    <p class="diagram-caption">The site owner never handles keys. The CDN turns the signature into a single trusted "verified" flag that rules can use.</p>
+    <p>AI agent operators already sign this way. OpenAI's ChatGPT agent, for example, is publicly documented as sending Web Bot Auth signatures with a <code>Signature-Agent</code> that points at its own directory. Cairn follows the same pattern so that the same edge rules can work for it too.</p>
+
+    <h2 id="limits">8. Limitations and draft status</h2>
+    <div class="callout warn"><strong>Web Bot Auth is still an Internet-Draft, not an RFC.</strong> Header names, the shape of <code>Signature-Agent</code> (later revisions discuss a structured-field dictionary instead of a bare string), the required components and the directory format may change. Cairn implements the profile described in this page and in <code>SPEC.md</code>. RFC 9421 (message signatures) and RFC 7638 (thumbprints), which it builds on, are stable.</div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Limitation</th><th>Impact</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>Only <code>@authority</code> and <code>signature-agent</code> are covered. Method, path and query are not.</td><td>Someone who captures a signed request could replay the headers against another path on the same host within the 5-minute window.</td><td>The nonce is unique per request. Verifiers that store nonces until <code>expires</code> can reject replays. Signatures prove <em>who</em> sent a request, not what was requested.</td></tr>
+        <tr><td>Local installs publish <code>http://127.0.0.1:&lt;port&gt;</code> as the agent</td><td>Remote sites cannot reach the loopback directory, so outside the local fixture the signatures cannot be verified</td><td>Set <code>CAIRN_PUBLIC_URL</code> to a public HTTPS origin that serves <code>/bot</code> and the directory</td></tr>
+        <tr><td>The directory response is not itself signed (<code>signResponse</code> is not implemented)</td><td>The draft recommends signed directory responses as proof that the directory controls the key</td><td>Serve the directory over HTTPS. Verifiers recompute the thumbprint from the JWK.</td></tr>
+        <tr><td>One key, no overlap during rotation</td><td>Signatures in flight fail for a short time after rotation</td><td>Rotate during idle periods. A future version could publish old and new keys together.</td></tr>
+        <tr><td>Published IP ranges are loopback by default</td><td>The IP layer is only meaningful once the operator sets <code>config.identity.ipv4Prefixes</code> / <code>ipv6Prefixes</code> to the real egress</td><td>Configure the real ranges before crawling the public web</td></tr>
+        <tr><td>Signatures are optional for verifiers</td><td>Sites that ignore them see only the UA, which is still honest</td><td>Every request also carries the UA, info URL and From contact</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

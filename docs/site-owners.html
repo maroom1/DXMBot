@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cairn for site owners — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Cairn for site owners</h1>
+    <p class="lead">Cairn uses three clearly labelled user agents, one per purpose. Each follows your robots.txt and can be allowed or blocked on its own. This page explains what each one does, gives robots.txt rules you can copy, and shows how to check that traffic really comes from Cairn.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#roles">Cairn's user agents</a></li>
+      <li><a href="#which">Which rule do I need?</a></li>
+      <li><a href="#recipes">robots.txt recipes</a></li>
+      <li><a href="#timing">How long changes take</a></li>
+      <li><a href="#page">Page-level controls (meta tags and X-Robots-Tag)</a></li>
+      <li><a href="#verify">Verifying genuine Cairn traffic</a></li>
+      <li><a href="#rate">Rate limits and politeness</a></li>
+      <li><a href="#never">What Cairn never does</a></li>
+      <li><a href="#faq">FAQ</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ol></div>
+
+    <div class="callout"><strong>Every Cairn installation has its own operator.</strong> Cairn is self-hosted software. The <code>+URL</code> at the end of the User-Agent string and the <code>From</code> header on each request identify the installation and the person responsible for it. The <code>/bot</code> page at that URL shows the installation's exact user agents, IP ranges, signing key and contact address.</div>
+
+    <h2 id="roles">1. Cairn's user agents</h2>
+    <div class="cards">
+      <div class="card"><h3>CairnSearch</h3><p>Crawls and indexes public pages so they can appear, with a link back to you, in answers and search results. Similar to OAI-SearchBot. <strong>Always follows robots.txt.</strong></p></div>
+      <div class="card"><h3>CairnCorpus</h3><p>Collects pages into a dataset used for model evaluation or training. It only runs in explicit corpus jobs. Similar to GPTBot. Blocking it <strong>does not affect search</strong>. <strong>Always follows robots.txt.</strong></p></div>
+      <div class="card"><h3>Cairn-User</h3><p>Fetches one specific page because a person asked a question, pasted a URL, or started a research task. It never crawls automatically. Similar to ChatGPT-User, but it <strong>follows robots.txt by default</strong>.</p></div>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>robots.txt token</th><th>Full User-Agent string</th><th>Used for</th><th>Follows robots.txt</th><th>IP list</th></tr></thead>
+      <tbody>
+        <tr><td><code>CairnSearch</code></td><td><code>Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; CairnSearch/1.0; +https://&lt;operator&gt;/bot</code></td><td>Search index crawl</td><td><span class="badge good">Always</span></td><td><code>/bot/cairnsearch.json</code></td></tr>
+        <tr><td><code>CairnCorpus</code></td><td><code>Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; CairnCorpus/1.0; +https://&lt;operator&gt;/bot</code></td><td>Dataset / training collection</td><td><span class="badge good">Always</span></td><td><code>/bot/cairncorpus.json</code></td></tr>
+        <tr><td><code>Cairn-User</code></td><td><code>Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +https://&lt;operator&gt;/bot</code></td><td>User-triggered single-page fetches</td><td><span class="badge good">By default</span> (see <a href="#faq">FAQ</a>)</td><td><code>/bot/cairn-user.json</code></td></tr>
+        <tr><td><code>Cairn</code></td><td>(never sent alone)</td><td>Family token: rules under <code>User-agent: Cairn</code> apply to every Cairn agent that has no group of its own</td><td>n/a</td><td>n/a</td></tr>
+      </tbody>
+    </table></div>
+    <p>The <code>Mozilla/5.0 … compatible;</code> prefix is the conventional compatibility prefix that major crawlers use (GPTBot and OAI-SearchBot use the same form). It is not an attempt to look like a browser. The product token and the info URL are always present.</p>
+
+    <h2 id="which">2. Which rule do I need?</h2>
+    <div class="diagram-title">Figure 1 — Choosing the right control</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  S["What do you want?"] --> Q1{"Keep Cairn off<br/>the whole site?"}
+  Q1 -->|yes| R1["Recipe B: block every Cairn agent"]
+  Q1 -->|no| Q2{"Keep content out of<br/>datasets and training only?"}
+  Q2 -->|yes| R2["Recipe A: User-agent CairnCorpus<br/>Disallow /"]
+  Q2 -->|no| Q3{"Keep some paths<br/>away from Cairn?"}
+  Q3 -->|yes| R3["Recipe C: User-agent Cairn<br/>Disallow the paths"]
+  Q3 -->|no| Q4{"Page may be fetched but<br/>must not be stored or shown?"}
+  Q4 -->|yes| R4["Page-level: meta robots or<br/>X-Robots-Tag noindex, nosnippet"]
+  Q4 -->|no| Q5{"Cairn crawls too fast?"}
+  Q5 -->|yes| R5["Recipe F: Crawl-delay<br/>or answer 429 with Retry-After"]
+  Q5 -->|no| Q6{"Stop answers from fetching<br/>pages on user request?"}
+  Q6 -->|yes| R6["Recipe E: User-agent Cairn-User<br/>Disallow /"]
+  Q6 -->|no| OK["Nothing to do.<br/>Default: allowed, 1 request per second at most"]
+    </pre></div>
+    <p class="diagram-caption">robots.txt controls whether Cairn may <em>request</em> a URL. Page-level tags control what Cairn may <em>do</em> with a page it has fetched.</p>
+
+    <h2 id="recipes">3. robots.txt recipes</h2>
+    <div class="callout warn"><strong>Important: a group for a specific agent replaces your <code>User-agent: *</code> group for that agent.</strong> If you add a <code>User-agent: CairnSearch</code> group, even one that contains only <code>Crawl-delay</code>, CairnSearch stops reading your <code>*</code> rules. Copy any <code>*</code> rules you still want into the new group. This is standard RFC 9309 behaviour, and Googlebot and other major crawlers work the same way.</div>
+
+    <h3>Recipe A: Opt out of datasets and training, stay in search</h3>
+    <pre class="code"><code>User-agent: CairnCorpus
+Disallow: /</code></pre>
+    <h3>Recipe B: Block every Cairn agent</h3>
+    <pre class="code"><code>User-agent: CairnSearch
+User-agent: CairnCorpus
+User-agent: Cairn-User
+User-agent: Cairn
+Disallow: /</code></pre>
+    <p>If you have no other Cairn-specific groups, <code>User-agent: Cairn</code> with <code>Disallow: /</code> is enough. Listing all tokens is the safest choice because it still works if you later add a role-specific group.</p>
+    <h3>Recipe C: Keep some paths away from all Cairn agents</h3>
+    <pre class="code"><code>User-agent: Cairn
+Disallow: /members/
+Disallow: /checkout/
+Disallow: /*sessionid=</code></pre>
+    <h3>Recipe D: Allow search for one section only</h3>
+    <pre class="code"><code>User-agent: CairnSearch
+Allow: /docs/
+Allow: /blog/
+Disallow: /</code></pre>
+    <p>The longest matching rule wins, so <code>/docs/intro.html</code> is allowed by <code>Allow: /docs/</code>, and everything else falls through to <code>Disallow: /</code>.</p>
+    <h3>Recipe E: Allow search, block user-triggered fetches</h3>
+    <pre class="code"><code>User-agent: Cairn-User
+Disallow: /</code></pre>
+    <h3>Recipe F: Slow down the search crawler</h3>
+    <pre class="code"><code>User-agent: CairnSearch
+Crawl-delay: 10
+Disallow: /private/        # repeat your * rules here, see the warning above</code></pre>
+    <h3>Recipe G: Help Cairn find your pages</h3>
+    <pre class="code"><code>Sitemap: https://www.example.com/sitemap.xml</code></pre>
+    <p><code>Sitemap:</code> lines apply to the whole file. Cairn follows sitemap indexes up to 3 levels deep. Sitemap URLs are still checked against robots.txt before they are fetched.</p>
+    <p>To test any of these, paste your robots.txt into the Robots tester in the Cairn web UI, or <code>POST /api/robots/check</code> with a <code>robotsTxt</code> field. It shows the decision and the matching rule for all three agents. <a href="robots.html">robots.txt compliance</a> has the full matching rules and 24 worked examples.</p>
+
+    <h2 id="timing">4. How long changes take</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Change you make</th><th>When Cairn sees it</th></tr></thead>
+      <tbody>
+        <tr><td>Edit <code>robots.txt</code></td><td>Within <strong>24 hours</strong>. Each installation caches robots.txt per origin for 24 hours. An operator can refresh it immediately by clearing the robots cache.</td></tr>
+        <tr><td>robots.txt returns an error (5xx, 429, timeout)</td><td>Cairn keeps using your last good robots.txt. If it has never seen one, it treats the whole site as disallowed. It tries again after <strong>10 minutes</strong>.</td></tr>
+        <tr><td>robots.txt returns 404 / 403 / 410</td><td>Treated as "no restrictions" (RFC 9309), and cached for 24 hours</td></tr>
+        <tr><td>Add <code>noindex</code> or <code>X-Robots-Tag</code></td><td>The next time the page is fetched. The tags are read on every fetch.</td></tr>
+        <tr><td>Content already stored by an operator</td><td>robots.txt and <code>noindex</code> control future fetching and indexing. They do not reach into copies an operator already saved. To ask for removal, <a href="#contact">contact the operator</a>, who can run <code>cairn index remove &lt;url&gt;</code>.</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="diagram-title">Figure 2 — What happens before each request to your site</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Cairn
+  participant Y as Your site
+  C->>C: robots.txt for this origin cached and fresh (under 24 h)?
+  alt not cached or expired
+    C->>Y: GET /robots.txt (Cairn UA, From, signature)
+    Y-->>C: 200 rules, or 404, or 5xx
+  end
+  C->>C: pick your group for this agent, match the URL
+  alt disallowed
+    C->>C: stop, log blocked by robots
+  else allowed
+    C->>C: wait for your per-host slot<br/>at least 1 s or your Crawl-delay
+    C->>Y: GET /page
+    Y-->>C: 200, or 429 with Retry-After
+    C->>C: honour noindex, nofollow, nosnippet, noarchive
+  end
+    </pre></div>
+    <p class="diagram-caption">Redirects are checked the same way on every hop. A redirect into a disallowed path is not followed.</p>
+
+    <h2 id="page">5. Page-level controls (meta tags and X-Robots-Tag)</h2>
+    <p>Use these when a page may be fetched but you want to limit what is stored or shown. They can apply to all agents, or be scoped to one Cairn agent.</p>
+    <pre class="code"><code>&lt;!-- all crawlers, including Cairn --&gt;
+&lt;meta name="robots" content="noindex, nofollow"&gt;
+
+&lt;!-- only Cairn's search indexer --&gt;
+&lt;meta name="CairnSearch" content="noindex"&gt;
+
+&lt;!-- every Cairn agent --&gt;
+&lt;meta name="Cairn" content="nosnippet"&gt;</code></pre>
+    <pre class="code"><code># HTTP response headers (also work for PDFs, JSON, images, …)
+X-Robots-Tag: noindex
+X-Robots-Tag: CairnSearch: noindex, nofollow</code></pre>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Directive</th><th>Effect on Cairn</th></tr></thead>
+      <tbody>
+        <tr><td><code>noindex</code></td><td>Not added to the search index or a dataset, and never used as an answer source. A page a user asks for directly may be shown to that user once, but it is not stored.</td></tr>
+        <tr><td><code>nofollow</code></td><td>Links on the page are not crawled. <code>rel="nofollow"</code> on a single link does the same for that link.</td></tr>
+        <tr><td><code>nosnippet</code></td><td>Search results show no snippet, and answers can cite the page but never quote its text</td></tr>
+        <tr><td><code>noarchive</code></td><td>Recorded on the stored page, so views that would show a stored copy can hide it</td></tr>
+        <tr><td><code>none</code></td><td>The same as <code>noindex, nofollow</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="verify">6. Verifying genuine Cairn traffic</h2>
+    <p>Anyone can copy a User-Agent string. To be sure a request really came from a particular Cairn installation, check the stronger signals:</p>
+    <ol>
+      <li><strong>User-Agent.</strong> It contains <code>CairnSearch/1.0</code>, <code>CairnCorpus/1.0</code> or <code>Cairn-User/1.0</code>, and a <code>+https://…/bot</code> info URL. This is a claim only.</li>
+      <li><strong>Source IP.</strong> Fetch the IP list for that agent from the operator's info URL, and check that the connecting IP falls inside one of the listed prefixes:
+        <pre class="code"><code>$ curl -s https://&lt;operator&gt;/bot/cairnsearch.json
+{"creationTime":"2026-09-30T08:00:00.000Z","prefixes":[{"ipv4Prefix":"203.0.113.0/28"},{"ipv6Prefix":"2001:db8:cafe::/48"}]}</code></pre></li>
+      <li><strong>Cryptographic signature (strongest).</strong> Requests carry Web Bot Auth headers: <code>Signature-Agent</code>, <code>Signature-Input</code> (<code>tag="web-bot-auth"</code>) and <code>Signature</code> (Ed25519). Fetch the public key from <code>&lt;Signature-Agent&gt;/.well-known/http-message-signatures-directory</code> and verify it. A CDN with a verified-bot program can also do this for you. <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a> has the exact algorithm and a reference verifier.</li>
+    </ol>
+    <div class="diagram-title">Figure 3 — Is this really Cairn?</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A["Request claims to be Cairn"] --> B{"UA has CairnSearch, CairnCorpus<br/>or Cairn-User and a +URL/bot"}
+  B -->|no| NOT["Not Cairn"]
+  B -->|yes| C{"Signature headers present<br/>and tag web-bot-auth"}
+  C -->|yes| D{"Signature verifies with the key from<br/>Signature-Agent key directory"}
+  D -->|yes| V["Verified Cairn installation<br/>strong proof"]
+  D -->|no| SUS["Treat as impostor"]
+  C -->|no| E{"Source IP inside the prefixes in<br/>/bot/agent.json"}
+  E -->|yes| L["Likely genuine<br/>network-level evidence"]
+  E -->|no| SUS
+    </pre></div>
+    <p class="diagram-caption">A local installation may publish only loopback ranges and a loopback key directory. Traffic that reaches the public internet should come from an installation whose operator has published real ranges and an HTTPS info URL.</p>
+
+    <h2 id="rate">7. Rate limits and politeness</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Behaviour</th><th>Default</th><th>How you can influence it</th></tr></thead>
+      <tbody>
+        <tr><td>Request rate per host</td><td><strong>At most 1 request per second</strong>, one connection at a time</td><td><code>Crawl-delay: N</code> spaces requests at least N seconds apart. A Crawl-delay shorter than the operator's minimum gap (1 s by default) is raised to that minimum.</td></tr>
+        <tr><td><code>429 Too Many Requests</code> / <code>503</code></td><td>The host is backed off exponentially (2 s, 4 s, 8 s … up to 60 s), and the request is retried at most 2 times</td><td>Send <code>Retry-After</code> (seconds or an HTTP date). It is honoured whenever it is longer than Cairn's own backoff.</td></tr>
+        <tr><td>Other 5xx / network errors</td><td>Same backoff and retry limit, after which the URL is given up</td><td>n/a</td></tr>
+        <tr><td>Recovery</td><td>The backoff resets after the next successful response</td><td>n/a</td></tr>
+        <tr><td>Crawl size</td><td>Crawl jobs default to 50 pages and link depth 2, and stay on the same site</td><td>Use robots.txt to narrow what can be crawled</td></tr>
+        <tr><td>Timeouts and limits</td><td>15 s per request, 5 MiB per response (truncated beyond that), at most 5 redirects</td><td>n/a</td></tr>
+        <tr><td>Methods</td><td><code>GET</code> only</td><td>n/a</td></tr>
+      </tbody>
+    </table></div>
+    <div class="diagram-title">Figure 4 — Per-host pacing and backoff</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> Ready
+  Ready --> Waiting: request started
+  Waiting --> Ready: gap elapsed, max of 1 s and Crawl-delay
+  Ready --> Backoff: 429, 503, 5xx or network error
+  Waiting --> Backoff: 429, 503, 5xx or network error
+  Backoff --> Backoff: another failure, delay doubles up to 60 s
+  Backoff --> Ready: delay or Retry-After elapsed and next request succeeds
+    </pre></div>
+    <p class="diagram-caption">Pacing is enforced centrally for each host, so running several crawl jobs at once does not multiply the load on your server.</p>
+
+    <h2 id="never">8. What Cairn never does</h2>
+    <ul>
+      <li>Pretend to be a browser, rotate user agents, or rotate IP addresses to get around blocks</li>
+      <li>Try to evade bot detection, solve CAPTCHAs, or work around rate limits</li>
+      <li>Run JavaScript, submit forms, log in, or send anything other than <code>GET</code></li>
+      <li>Follow a redirect into a path your robots.txt disallows</li>
+      <li>Use a page marked <code>noindex</code> as a stored answer source</li>
+      <li>Train on or collect content through <code>CairnSearch</code> or <code>Cairn-User</code>. Dataset collection only ever uses <code>CairnCorpus</code>.</li>
+    </ul>
+
+    <h2 id="faq">9. FAQ</h2>
+    <h3>Does blocking CairnCorpus remove me from search?</h3>
+    <p>No. The agents are independent. <code>User-agent: CairnCorpus</code> / <code>Disallow: /</code> only opts you out of datasets.</p>
+    <h3>Does Cairn-User ignore robots.txt, like ChatGPT-User?</h3>
+    <p>Not by default. OpenAI documents that robots.txt "may not apply" to ChatGPT-User because a user asked for the page. Cairn-User follows robots.txt unless the operator explicitly changes the <code>respectForUserFetch</code> setting. Even then, fetches are single pages requested by a person, clearly identified, rate-limited, and recorded in the operator's audit log as having skipped robots.txt. They are never used for automatic crawling or dataset collection.</p>
+    <h3>Why do I see Cairn requests from 127.0.0.1?</h3>
+    <p>That is a local installation, usually a developer testing Cairn against a site on their own machine. Its published IP range and key directory are loopback addresses too.</p>
+    <h3>Do I need to do anything to be included?</h3>
+    <p>No. If your robots.txt allows the agent, Cairn can fetch your pages. A <code>Sitemap:</code> line helps it find pages that are not linked from anywhere.</p>
+    <h3>Will blocking Cairn affect other crawlers?</h3>
+    <p>No. Cairn's tokens are only read by Cairn. Rules for <code>Cairn</code>, <code>CairnSearch</code>, <code>CairnCorpus</code> and <code>Cairn-User</code> do not affect Googlebot, GPTBot or anyone else.</p>
+
+    <h2 id="contact">10. Contact</h2>
+    <p>Every request includes a <code>From</code> header with the operator's contact address. The same address appears on the installation's <code>/bot</code> page, which is linked from the User-Agent. Use it to report problems, ask for content to be removed, or ask for a slower crawl rate. Operators set this address with <code>CAIRN_CONTACT</code> or the <code>contact</code> setting. Please include the full User-Agent, the URLs, and the times of the requests, so the operator can find them in Cairn's audit log.</p>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

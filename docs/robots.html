@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>robots.txt compliance — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>robots.txt compliance</h1>
+    <p class="lead">How Cairn implements the Robots Exclusion Protocol (RFC 9309) and page-level robots directives: group selection, rule matching, caching, status codes, redirects, meta tags and <code>X-Robots-Tag</code>, with worked examples and a comparison to the OpenAI, xAI and Anthropic crawlers.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#scope">Scope: who checks robots.txt, and when</a></li>
+      <li><a href="#parsing">Parsing</a></li>
+      <li><a href="#groups">Group selection: CairnSearch → Cairn → *</a></li>
+      <li><a href="#matching">Rule matching</a></li>
+      <li><a href="#delay">Crawl-delay and Sitemap</a></li>
+      <li><a href="#status">Status codes, caching and failures</a></li>
+      <li><a href="#redirects">Redirects are re-checked on every hop</a></li>
+      <li><a href="#page">Page-level controls: meta robots and X-Robots-Tag</a></li>
+      <li><a href="#examples">Worked examples</a></li>
+      <li><a href="#compare">Comparison with OpenAI, xAI and Anthropic</a></li>
+      <li><a href="#impl">Implementation map</a></li>
+    </ol></div>
+
+    <h2 id="scope">1. Scope: who checks robots.txt, and when</h2>
+    <p>Every HTTP request Cairn makes goes through one component, the <code>Fetcher</code> (<code>src/net/fetcher.js</code>). Before it sends a page request, the fetcher asks the <code>RobotsCache</code> (<code>src/robots/cache.js</code>) whether the URL is allowed for the <em>role</em> making the request. There are three roles and each has its own robots.txt token, so site owners can control each one separately.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Role</th><th>Primary token</th><th>Token order used for group selection</th><th>Respects robots.txt</th></tr></thead>
+      <tbody>
+        <tr><td><code>search</code>: search indexer</td><td><code>CairnSearch</code></td><td><code>CairnSearch</code> → <code>Cairn</code> → <code>*</code></td><td><span class="badge good">Always</span></td></tr>
+        <tr><td><code>corpus</code>: dataset collector</td><td><code>CairnCorpus</code></td><td><code>CairnCorpus</code> → <code>Cairn</code> → <code>*</code></td><td><span class="badge good">Always</span></td></tr>
+        <tr><td><code>user</code>: user-triggered fetch</td><td><code>Cairn-User</code></td><td><code>Cairn-User</code> → <code>Cairn</code> → <code>*</code></td><td><span class="badge good">By default</span> (<code>config.robots.respectForUserFetch</code>, default <code>true</code>)</td></tr>
+      </tbody>
+    </table></div>
+    <p>The token list comes from <code>robotsTokens(role)</code> in <code>src/identity.js</code>, which returns <code>[roleToken, 'Cairn']</code>. <code>*</code> is the fallback used only when neither token has a group.</p>
+    <div class="callout">The only request that skips the robots check is the request for <code>/robots.txt</code> itself. It still carries Cairn's honest User-Agent, is rate-limited like any other request, is signed (when signing is enabled) and is written to the audit log with <code>kind:'robots'</code>. When <code>fetch.blockPrivateNetworks</code> is on, it is also screened like a page request (scheme, private address, DNS answers, every redirect hop); a refused robots.txt request counts as "unreachable" (status 0), never as "missing".</div>
+    <p>If an operator turns off <code>respectForUserFetch</code>, user-triggered fetches are still logged, with <code>robots:'skipped'</code>, so the choice shows up in the audit log. Search and corpus crawls always obey robots.txt, and no setting changes that.</p>
+
+    <h2 id="parsing">2. Parsing</h2>
+    <p><code>parseRobots(text)</code> (<code>src/robots/parser.js</code>) builds a <code>RobotsTxt</code> object, <code>{groups:[{userAgents, rules, crawlDelay}], sitemaps}</code>. The parser is deliberately lenient, because real-world robots.txt files are often messy:</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Input feature</th><th>Behaviour</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>UTF-8 byte-order mark, CRLF / CR / LF line endings</td><td>Stripped / normalized before parsing</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td><code># comments</code> (full-line or trailing)</td><td>Removed</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Leading and trailing whitespace, whitespace around <code>:</code></td><td>Trimmed</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Directive keys (<code>User-Agent</code>, <code>DISALLOW</code>, …)</td><td>Matched case-insensitively</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Consecutive <code>User-agent</code> lines</td><td>Share one group (RFC 9309 §2.1)</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Rules before the first <code>User-agent</code></td><td>Ignored (they belong to no group)</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Unknown directives (<code>Host:</code>, <code>Noindex:</code>, <code>Clean-param:</code>, …)</td><td>Ignored without error</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td><code>Sitemap:</code></td><td>Global: collected into <code>sitemaps[]</code> wherever it appears in the file</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td><code>Crawl-delay:</code></td><td>The first finite, non-negative number in a group is stored as <code>crawlDelay</code> (seconds; otherwise <code>null</code>). Values above 300 make the fetcher refuse the URL (see <a href="#delay">§5</a>)</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Files larger than 500 KiB</td><td>Only the first 500 KiB (512,000 bytes) are parsed, per RFC 9309 §2.5</td><td><span class="badge good">Implemented</span></td></tr>
+        <tr><td>Typos such as <code>useragent</code> / <code>user agent</code></td><td>Not recognised (the RFC does not require it)</td><td><span class="badge">Not supported</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="groups">3. Group selection: CairnSearch → Cairn → *</h2>
+    <p><code>RobotsTxt.selectGroup(tokens)</code> tries each token in order. The first token with any matching group wins, and only that group's rules apply. A group matches a token when one of its <code>User-agent</code> values:</p>
+    <ul>
+      <li>equals the token, ignoring case (<code>cairnsearch</code> matches <code>CairnSearch</code>), <strong>or</strong></li>
+      <li>starts with the token followed by <code>/</code> (<code>User-agent: CairnSearch/1.0</code> matches <code>CairnSearch</code>).</li>
+    </ul>
+    <p>If several groups match the same token, their rules are <strong>merged</strong> into one rule set (RFC 9309 §2.2.1). If no token matches, all <code>User-agent: *</code> groups are merged and used. If there is no <code>*</code> group either, the result is <code>null</code> and everything is allowed.</p>
+    <div class="callout warn"><strong>A specific group replaces <code>*</code>; it does not add to it.</strong> If your file has a <code>User-agent: CairnSearch</code> group, CairnSearch ignores everything under <code>User-agent: *</code>. Rules you want CairnSearch to follow must be repeated in its own group. This is the same as Googlebot and RFC 9309. Examples 4 and 5 below show the effect.</div>
+
+    <div class="diagram-title">Figure 1 — Group selection for a role</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A["check(url, role)"] --> B["tokens = robotsTokens(role)<br/>e.g. CairnSearch, Cairn"]
+  B --> C{"Any group whose UA equals<br/>CairnSearch or CairnSearch/..."}
+  C -->|yes| M1["Merge every matching group"]
+  C -->|no| D{"Any group for the<br/>family token Cairn"}
+  D -->|yes| M2["Merge every Cairn group"]
+  D -->|no| E{"Any User-agent: * group"}
+  E -->|yes| M3["Merge every * group"]
+  E -->|no| N["null: no rules apply,<br/>everything allowed"]
+  M1 --> R["Evaluate rules: longest match"]
+  M2 --> R
+  M3 --> R
+    </pre></div>
+    <p class="diagram-caption">The first token that has a group wins. Rules are never merged across tokens, so a role-specific group fully replaces the <code>Cairn</code> and <code>*</code> groups.</p>
+
+    <h2 id="matching">4. Rule matching</h2>
+    <p><code>RobotsTxt.isAllowed(tokens, urlOrPath)</code> returns <code>{allowed, rule, matchedAgent}</code>. The steps are:</p>
+    <ol>
+      <li><strong>Target string.</strong> The URL's path plus query (<code>pathWithQuery</code>). The fragment is never part of it. An empty path becomes <code>/</code>.</li>
+      <li><strong><code>/robots.txt</code> is always allowed</strong>, even under <code>Disallow: /</code> or <code>RobotsTxt.disallowAll()</code>.</li>
+      <li><strong>Percent-encoding normalization</strong> is applied to both the rule pattern and the target. Escapes for unreserved characters (<code>A–Z a–z 0–9 - . _ ~</code>) are decoded, so <code>%7E</code> becomes <code>~</code>. All other escapes are kept, with their hex digits uppercased, so <code>%2f</code> becomes <code>%2F</code>. That means <code>/%7Euser</code> and <code>/~user</code> are the same, but <code>/a%2Fb</code> and <code>/a/b</code> are not.</li>
+      <li><strong>Patterns.</strong> A rule matches when it matches a prefix of the target. <code>*</code> matches any run of characters, including none. A trailing <code>$</code> means the pattern must match all the way to the end of the target.</li>
+      <li><strong>Empty <code>Disallow:</code></strong> lines are ignored. They mean "nothing is disallowed".</li>
+      <li><strong>Longest match wins.</strong> Among the matching rules, the one with the longest pattern (in octets) decides.</li>
+      <li><strong>Ties go to Allow.</strong> If an <code>Allow</code> and a <code>Disallow</code> of equal length both match, the URL is allowed (RFC 9309 §2.2.2).</li>
+      <li><strong>No matching rule</strong> means the URL is allowed.</li>
+    </ol>
+
+    <pre class="code"><code>// Condensed from src/robots/parser.js (illustrative)
+function decide(group, target) {
+  if (target === '/robots.txt' || target.startsWith('/robots.txt?')) return { allowed: true, rule: null };
+  if (!group) return { allowed: true, rule: null };                  // no group selected
+  const t = normalizePercent(target);
+  let best = null;
+  for (const rule of group.rules) {
+    if (rule.type === 'disallow' &amp;&amp; rule.path === '') continue;         // empty Disallow is a no-op
+    if (!patternMatches(normalizePercent(rule.path), t)) continue;      // '*' wildcard, '$' end anchor
+    const len = Buffer.byteLength(rule.path);
+    if (!best || len &gt; best.len || (len === best.len &amp;&amp; rule.type === 'allow')) best = { rule, len };
+  }
+  return best ? { allowed: best.rule.type === 'allow', rule: best.rule } : { allowed: true, rule: null };
+}</code></pre>
+
+    <div class="diagram-title">Figure 2 — Evaluating one URL against the selected group</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  U["URL"] --> P["target = path + query<br/>fragment dropped"]
+  P --> RB{"target is /robots.txt"}
+  RB -->|yes| AL1["ALLOW"]
+  RB -->|no| G{"Group selected"}
+  G -->|"no (null)"| AL2["ALLOW"]
+  G -->|yes| N["Normalize percent-encoding<br/>of target and each pattern"]
+  N --> F["Keep rules whose pattern matches<br/>a prefix of target<br/>(* wildcard, $ anchor)<br/>skip empty Disallow"]
+  F --> Z{"Any match"}
+  Z -->|no| AL3["ALLOW"]
+  Z -->|yes| L["Pick the longest pattern in octets<br/>on a tie prefer Allow"]
+  L --> D{"Winning rule type"}
+  D -->|allow| AL4["ALLOW, rule reported"]
+  D -->|disallow| DI["DISALLOW, rule reported"]
+    </pre></div>
+    <p class="diagram-caption">The winning rule is returned with the decision and saved in the audit log (<code>rule</code> field), so every block can be explained afterwards.</p>
+
+    <h2 id="delay">5. Crawl-delay and Sitemap</h2>
+    <h3>Crawl-delay</h3>
+    <p><code>Crawl-delay</code> is not part of RFC 9309, but many sites use it and Cairn honours it. <code>crawlDelay(tokens)</code> returns the value from the group that group selection picked (the same group that supplies the rules). The fetcher passes that value to the host scheduler as <code>crawlDelaySec</code>. The scheduler then spaces request starts to the same host at least this far apart:</p>
+    <pre class="code"><code>gap = max(config.politeness.minDelayMs, crawlDelaySec × 1000)     // minDelayMs defaults to 1000 ms</code></pre>
+    <p>So <code>Crawl-delay: 10</code> means at most one request every 10 seconds. With no Crawl-delay, Cairn's default is one request per second per host, with at most one request in flight per host. Crawl jobs never add their own sleeps. All pacing comes from the scheduler, so the limit applies across concurrent jobs.</p>
+    <p>A very large Crawl-delay would park requests in the queue for hours or days, so Cairn caps what it will wait for at <strong>300 seconds</strong> (<code>MAX_CRAWL_DELAY_SEC</code> in <code>src/net/fetcher.js</code>). Above that, the site is treated as disallowing the role:</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th><code>Crawl-delay</code> in the selected group</th><th>Fetcher behaviour</th><th>What callers see</th></tr></thead>
+      <tbody>
+        <tr><td>absent, negative or not a number</td><td>Ignored; spacing is <code>politeness.minDelayMs</code> (1 s)</td><td>—</td></tr>
+        <tr><td><code>0</code> … <code>300</code></td><td>Requests to the host start at least <code>max(minDelayMs, delay × 1000)</code> apart</td><td>Normal fetch</td></tr>
+        <tr><td>above <code>300</code></td><td><strong>Treated as disallow</strong>: nothing is requested</td><td><code>blocked.reason: "robots"</code>, <code>blocked.rule: null</code>, <code>blocked.detail</code> "Crawl-delay of 600 s in … exceeds Cairn's maximum of 300 s; treated as disallowed", <code>blocked.robots.crawlDelayLimit: 300</code>; audit <code>robots:'disallowed'</code>; crawl outcome <code>blocked-robots</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>The over-limit block is a <em>politeness</em> refusal, not an opt-out, so a crawl does not remove a previously indexed copy because of it (only a real <code>Disallow</code> rule does). <code>POST /api/robots/check</code> reports the raw decision (<code>allowed: true</code> with <code>crawlDelay: 600</code>); the limit is applied by the fetcher.</p>
+    <h3>Sitemap</h3>
+    <p><code>Sitemap:</code> lines are global and are returned in <code>sitemaps[]</code> whichever group they appear in. When a crawl starts, it seeds the frontier from these URLs. If <code>useSitemaps</code> is on, it also tries <code>/sitemap.xml</code>. Sitemap indexes are followed up to 3 levels deep, with at most 1,000 URLs in total. Listing a URL in a sitemap does not bypass robots.txt: every sitemap URL is checked like any other URL before it is fetched.</p>
+
+    <h2 id="status">6. Status codes, caching and failures</h2>
+    <p>Cached robots.txt files are keyed by <strong>origin</strong> (scheme + host + port). <code>http://example.com</code>, <code>https://example.com</code> and <code>https://www.example.com</code> are three separate origins, each with its own robots.txt. The file is fetched with the requesting role's User-Agent, using <code>fetchRaw</code>. That call follows up to 5 redirects and applies the normal rate limits, signing and audit logging.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Outcome of fetching /robots.txt</th><th>What Cairn assumes</th><th>How long it is cached</th><th><code>source</code></th><th>RFC 9309 basis</th></tr></thead>
+      <tbody>
+        <tr><td><strong>2xx</strong></td><td>Parse the body (first 500 KiB) and apply it</td><td><code>config.robots.cacheTtlMs</code>: default 24 h, <strong>never more than 24 h</strong></td><td><code>network</code>, then <code>cache</code></td><td>§2.3.1.1, §2.4</td></tr>
+        <tr><td><strong>3xx</strong></td><td>Redirects are followed (up to 5 hops) and the final response's status decides, using this table. More than 5 hops: treated as unavailable (allow all). A redirect Cairn refuses to follow (non-http(s) or, with <code>blockPrivateNetworks</code>, a private target) means the file was never read: <strong>unreachable</strong>, as for a network error</td><td>Same as the final status</td><td>Same as the final status</td><td>§2.3.1.2 (at least 5 hops)</td></tr>
+        <tr><td><strong>4xx</strong> (400, 401, 403, 404, 410, …) except 429</td><td>"Unavailable": <strong>allow everything</strong> (<code>RobotsTxt.allowAll()</code>)</td><td>Same TTL as 2xx (≤ 24 h)</td><td><code>network</code>, then <code>cache</code></td><td>§2.3.1.3</td></tr>
+        <tr><td><strong>429 Too Many Requests</strong></td><td>"Unreachable": use the previous copy if there is one (even if expired), otherwise <strong>disallow everything</strong></td><td>At most 10 min, then retried</td><td><code>stale</code>, or <code>network</code> with disallow-all</td><td>§2.3.1.4 (Cairn treats 429 like 5xx, as most major crawlers do)</td></tr>
+        <tr><td><strong>5xx</strong></td><td>"Unreachable": previous copy if there is one, otherwise <strong>disallow everything</strong></td><td>At most 10 min, then retried</td><td><code>stale</code>, or <code>network</code> with disallow-all</td><td>§2.3.1.4</td></tr>
+        <tr><td><strong>Network error</strong> (DNS, connection refused, TLS, timeout) or a robots.txt request refused by the private-network screen, reported as <code>status: 0</code></td><td>Same as 5xx</td><td>At most 10 min, then retried</td><td><code>stale</code>, or <code>network</code> with disallow-all</td><td>§2.3.1.4</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><strong>Stale copies.</strong> If a refresh fails with 429, 5xx or a network error, Cairn keeps using the last good robots.txt instead of dropping to allow-all. This is the conservative choice: a site in trouble keeps the restrictions it last published. RFC 9309 allows a crawler to assume no restrictions after 30 days of unreachability. Cairn never does that.</li>
+      <li><strong>TTL read at use time, capped at 24 h.</strong> The cache reads <code>config.robots.cacheTtlMs</code> on every lookup, so a <code>POST /api/config</code> change applies without a restart. An entry expires at the earlier of its original expiry and <code>fetchedAt + current TTL</code>, so lowering the TTL shortens existing entries at once. Values above 24 h are clamped by the cache and rejected by <code>POST /api/config</code> (<code>400</code> "robots.cacheTtlMs must be at most 86400000"). Failure results last <code>min(TTL, 10 min)</code>.</li>
+      <li><strong>Bounded.</strong> At most 2000 origins are cached; expired entries are evicted first, then the least recently refreshed.</li>
+      <li><strong>Single-flight.</strong> If many requests for the same origin arrive at once (for example, a crawl with <code>concurrency: 4</code>), they share one in-flight robots.txt fetch. The file is never fetched twice in parallel.</li>
+      <li><strong>Inspection and invalidation.</strong> <code>GET /api/robots/cache</code> lists cached entries: origin, status, fetchedAt, expiresAt, group count and sitemaps. <code>POST /api/robots/cache/clear</code> empties the cache so the next request re-fetches.</li>
+    </ul>
+
+    <div class="diagram-title">Figure 3 — robots.txt cache entry lifecycle (per origin)</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> Fetching: first get() for origin
+  Fetching --> Fresh: 2xx parsed
+  Fetching --> AllowAll: 4xx (not 429)
+  Fetching --> DisallowAll: 429, 5xx or network error with no previous copy
+  Fetching --> StaleInUse: 429, 5xx or network error with a previous copy
+  Fresh --> Expired: 24 h TTL elapsed
+  AllowAll --> Expired: 24 h TTL elapsed
+  DisallowAll --> Expired: 10 min failure TTL elapsed
+  StaleInUse --> Expired: 10 min failure TTL elapsed
+  Expired --> Fetching: next get()
+  Fresh --> [*]: invalidate() or clear()
+  AllowAll --> [*]: invalidate() or clear()
+    </pre></div>
+    <p class="diagram-caption">Successful results and 4xx results last for the configured TTL (24 hours by default, never longer). Failures are retried after at most 10 minutes. The last good copy is kept, and reused while the server keeps failing.</p>
+
+    <h2 id="redirects">7. Redirects are re-checked on every hop</h2>
+    <p>Cairn follows page redirects itself, one hop at a time (up to <code>config.fetch.maxRedirects</code>, default 5), rather than letting the HTTP client follow them automatically. Before following each <code>Location</code>, it runs the robots check again on the new URL. If the new URL is on a different origin, that origin's robots.txt is fetched or loaded from cache. A redirect into a disallowed area therefore stops at the redirect. The disallowed page is never requested.</p>
+
+    <div class="diagram-title">Figure 4 — A redirect into a disallowed path (fixture <code>/redirect-to-private</code>)</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant F as Fetcher
+  participant RC as RobotsCache
+  participant S as site.example
+  F->>RC: check(/redirect-to-private, search)
+  RC-->>F: allowed, no matching rule
+  F->>S: GET /redirect-to-private (CairnSearch UA)
+  S-->>F: 302 Location: /private/secret.html
+  F->>RC: check(/private/secret.html, search)
+  RC-->>F: DISALLOWED by Disallow: /private/
+  Note over F: stop here, never request /private/secret.html<br/>result.blocked = robots, audit entry written
+  F-->>F: return FetchResult with redirects[] and blocked
+    </pre></div>
+    <p class="diagram-caption">Two audit entries are written: one for the 302 response, and one with <code>blocked:'robots'</code> and <code>status: null</code> for the refused hop.</p>
+    <p>The refusal describes the hop that was actually blocked, not the URL first requested. <code>FetchResult.blocked</code> for a robots block is:</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>reason</code></td><td><code>"robots"</code></td></tr>
+        <tr><td><code>detail</code></td><td>Human-readable: <code>Disallowed by &lt;robotsUrl&gt; (disallow: /private/)</code>, plus the synthetic-policy note when robots.txt was unreachable, or the Crawl-delay explanation</td></tr>
+        <tr><td><code>rule</code></td><td>The matching rule, or <code>null</code> (synthetic disallow-all, Crawl-delay over 300 s)</td></tr>
+        <tr><td><code>robots</code></td><td>The blocking hop's full decision: <code>url</code> (the hop), <code>allowed: false</code>, <code>rule</code>, <code>matchedAgent</code>, <code>robotsUrl</code> (the hop's origin), <code>crawlDelay</code>, <code>status</code>, <code>source</code>, <code>fetchedAt</code>, <code>expiresAt</code>, <code>note</code> (set for synthetic policies), and <code>crawlDelayLimit: 300</code> for Crawl-delay blocks</td></tr>
+      </tbody>
+    </table></div>
+    <p><code>POST /api/fetch</code> returns this <code>blocked.robots</code> as its top-level <code>robots</code> field, so a redirect from <code>a.example</code> into a path disallowed by <code>b.example/robots.txt</code> is explained with <code>b.example</code>'s rule. Crawls use <code>robots.note</code> and <code>crawlDelayLimit</code> to tell a real opt-out (drop any indexed copy) from a temporary or politeness block (keep it).</p>
+
+    <h2 id="page">8. Page-level controls: meta robots and X-Robots-Tag</h2>
+    <p>robots.txt decides whether Cairn may <em>request</em> a URL. Page-level directives decide what Cairn may <em>do with</em> a page it was allowed to fetch. Cairn reads them from two places and combines them. If any source sets a directive, it applies.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Source</th><th>Form</th><th>Applies to</th></tr></thead>
+      <tbody>
+        <tr><td>HTML meta, generic</td><td><code>&lt;meta name="robots" content="noindex, nofollow"&gt;</code></td><td>All roles</td></tr>
+        <tr><td>HTML meta, bot-scoped</td><td><code>&lt;meta name="CairnSearch" content="noindex"&gt;</code></td><td>Only the role whose token is named. <code>name="Cairn"</code> applies to every Cairn role. Names are matched case-insensitively.</td></tr>
+        <tr><td>HTTP header, generic</td><td><code>X-Robots-Tag: noindex</code></td><td>All roles. Works for non-HTML responses too.</td></tr>
+        <tr><td>HTTP header, bot-scoped</td><td><code>X-Robots-Tag: CairnSearch: noindex</code></td><td>Only the role whose token is named</td></tr>
+        <tr><td>Link-level</td><td><code>&lt;a href="…" rel="nofollow"&gt;</code></td><td>That one link is not added to the crawl frontier</td></tr>
+      </tbody>
+    </table></div>
+    <p>Supported values: <code>noindex</code>, <code>nofollow</code>, <code>noarchive</code> (also <code>nocache</code>), <code>nosnippet</code> (also <code>max-snippet:0</code>, with or without spaces around the colon), and <code>none</code> (the same as <code>noindex, nofollow</code>). Other values, including <code>max-snippet</code> with a non-zero value, are ignored. Directives scoped to other bots, such as <code>googlebot: noindex</code>, are ignored.</p>
+    <h3 id="xrt">How <code>X-Robots-Tag</code> is parsed (fails closed)</h3>
+    <p>HTTP clients join repeated <code>X-Robots-Tag</code> header lines with <code>", "</code>. So <code>X-Robots-Tag: otherbot: noindex</code> followed by <code>X-Robots-Tag: nofollow</code> arrives as <code>otherbot: noindex, nofollow</code>, and it is impossible to tell whether <code>nofollow</code> continues otherbot's line or is a separate site-wide line. <code>parseXRobotsTag</code> therefore splits on commas and judges each part on its own; when in doubt it applies the restriction.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Header value (as received)</th><th>Result for <code>CairnSearch</code></th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>noindex, nofollow</code></td><td>noindex, nofollow</td><td>Unscoped directives apply to every role</td></tr>
+        <tr><td><code>CairnSearch: NOINDEX</code></td><td>noindex</td><td>Own token; scope and value are case-insensitive</td></tr>
+        <tr><td><code>Cairn: nofollow</code></td><td>nofollow</td><td>The family token addresses every Cairn role</td></tr>
+        <tr><td><code>otherbot: noindex, nofollow</code></td><td><strong>nofollow</strong> only</td><td>A foreign <code>&lt;bot&gt;:</code> prefix scopes only the directive attached to it. The bare <code>nofollow</code> may be its own line, so it applies — a scope never leaks into later parts</td></tr>
+        <tr><td><code>otherbot: noindex, CairnSearch: nosnippet</code></td><td>nosnippet</td><td>Each scoped part is judged separately</td></tr>
+        <tr><td><code>CairnSearch: noindex, nofollow</code> (fetched as <code>Cairn-User</code>)</td><td>— (for <code>Cairn-User</code>: nofollow)</td><td>The same rule from the other side: the bare <code>nofollow</code> applies to all roles</td></tr>
+        <tr><td><code>max-snippet: 0</code> · <code>CairnSearch: max-snippet:0</code></td><td>nosnippet</td><td><code>max-snippet</code> takes a value, so it is never mistaken for a bot scope; <code>0</code> means no snippet</td></tr>
+        <tr><td><code>max-snippet: 20, noindex</code></td><td>noindex</td><td>A non-zero snippet length is not a restriction Cairn models</td></tr>
+        <tr><td><code>nocache</code></td><td>noarchive</td><td>Synonym</td></tr>
+        <tr><td><code>CairnSearch:</code> (nothing after the colon), unknown words</td><td>nothing</td><td>Empty or unrecognised parts are skipped without affecting the others</td></tr>
+      </tbody>
+    </table></div>
+    <p>Value directives that are never treated as scopes: <code>max-snippet</code>, <code>max-image-preview</code>, <code>max-video-preview</code>, <code>unavailable_after</code>.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Directive</th><th>Search crawl (<code>CairnSearch</code>)</th><th>Corpus crawl (<code>CairnCorpus</code>)</th><th>User fetch / answers (<code>Cairn-User</code>)</th></tr></thead>
+      <tbody>
+        <tr><td><code>noindex</code></td><td>Not added to the index (crawl outcome <code>noindex</code>). Links are still followed unless <code>nofollow</code> is also set.</td><td>Not collected into the JSONL dataset (outcome <code>noindex</code>)</td><td>The page can be shown to the person or agent who asked for it in that session, but it is not stored: <code>/api/fetch</code> with <code>index:true</code> skips <code>index.add</code>. It therefore never reaches quick-mode retrieval.</td></tr>
+        <tr><td colspan="4"><strong><code>/api/fetch</code> with <code>index:true</code> follows the search crawler's rules</strong> whichever role fetched the page, because the index is <code>CairnSearch</code>'s: the final URL must be allowed by robots.txt for the fetching role <em>and</em> for <code>CairnSearch</code>; <code>noindex</code>/<code>nosnippet</code>/<code>noarchive</code> addressed to <code>CairnSearch</code>, <code>Cairn</code> or all robots apply (meta and <code>X-Robots-Tag</code>), merged with the fetching role's own; and the crawler's canonical and content-hash dedupe apply (<code>indexed: "duplicate"</code>). A real <code>CairnSearch</code> disallow or a <code>CairnSearch</code> <code>noindex</code> also removes a previously indexed copy. See the <a href="api.html#fetch-index">API reference</a>.</td></tr>
+        <tr><td><code>nofollow</code></td><td>Links on the page are not added to the frontier. <code>rel="nofollow"</code> does the same for a single link.</td><td>Same</td><td>The Fetch inspector still lists the links, each with a <code>nofollow</code> flag. Nothing is crawled automatically.</td></tr>
+        <tr><td><code>noarchive</code></td><td>Indexed, with <code>noarchive: true</code> recorded on the document, so any view that would show the stored copy can hide it</td><td>Recorded with the collected page</td><td>Recorded when the page is indexed</td></tr>
+        <tr><td><code>nosnippet</code></td><td>Indexed, but search results show an empty snippet, and the page text is never used as a RAG passage beyond its title</td><td>Recorded with the collected page</td><td>Answers can cite the URL and title, but never quote the text</td></tr>
+        <tr><td><code>none</code></td><td>Same as <code>noindex</code> + <code>nofollow</code></td><td>Same</td><td>Same</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="diagram-title">Figure 5 — What happens to a fetched page</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A["Allowed by robots.txt, fetched 200"] --> B["Read X-Robots-Tag header<br/>(generic and role-scoped)"]
+  B --> C["Extract HTML meta robots<br/>(robots, CairnSearch, Cairn)"]
+  C --> D["Merge: any source that sets a directive wins"]
+  D --> E{"noindex"}
+  E -->|yes| X["Do not index or collect<br/>outcome noindex"]
+  E -->|no| I["Index or collect<br/>record noarchive, nosnippet flags"]
+  X --> NF{"nofollow"}
+  I --> NF
+  NF -->|yes| S1["Enqueue no links"]
+  NF -->|no| S2["Enqueue links except rel=nofollow,<br/>subject to scope and robots checks"]
+    </pre></div>
+    <p class="diagram-caption"><code>noindex</code> and <code>nofollow</code> are independent. A <code>noindex</code> page can still lead the crawler to other pages, as the fixture's <code>/noindex.html</code> → <code>/via-noindex.html</code> test shows.</p>
+
+    <h2 id="examples">9. Worked examples</h2>
+    <p>Several rows use the Northwind Trails fixture site's robots.txt, called <strong>Fixture A</strong> in the table:</p>
+    <pre class="code"><code>User-agent: *
+Disallow: /private/
+Disallow: /admin/
+
+User-agent: CairnSearch
+Allow: /private/public-note.html
+Disallow: /private/
+Disallow: /*.pdf$
+Disallow: /search?
+
+User-agent: CairnCorpus
+Disallow: /
+
+Sitemap: http://127.0.0.1:8788/sitemap.xml</code></pre>
+    <div class="table-scroll"><table>
+      <thead><tr><th>#</th><th>robots.txt snippet</th><th>URL (path)</th><th>Role</th><th>Decision</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>User-agent: *<br>Disallow: /private/</code></td><td><code>/private/a.html</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td>No <code>CairnSearch</code> or <code>Cairn</code> group, so the <code>*</code> group applies. <code>Disallow: /private/</code> matches.</td></tr>
+        <tr><td>2</td><td>Fixture A</td><td><code>/private/public-note.html</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The CairnSearch group is selected. <code>Allow: /private/public-note.html</code> (25 octets) is longer than <code>Disallow: /private/</code> (9), so it wins.</td></tr>
+        <tr><td>3</td><td>Fixture A</td><td><code>/private/secret.html</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td>The only matching rule is <code>Disallow: /private/</code>.</td></tr>
+        <tr><td>4</td><td>Fixture A</td><td><code>/admin/index.html</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The CairnSearch group <em>replaces</em> <code>*</code>, and it does not disallow <code>/admin/</code>. The <code>*</code> rule does not apply to CairnSearch.</td></tr>
+        <tr><td>5</td><td>Fixture A</td><td><code>/admin/index.html</code></td><td>user</td><td><span class="badge bad">Disallowed</span></td><td>There is no <code>Cairn-User</code> or <code>Cairn</code> group, so the <code>*</code> group applies: <code>Disallow: /admin/</code>.</td></tr>
+        <tr><td>6</td><td>Fixture A</td><td><code>/file.pdf</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td><code>/*.pdf$</code>: <code>*</code> matches <code>file</code>, and <code>$</code> requires the target to end in <code>.pdf</code>.</td></tr>
+        <tr><td>7</td><td>Fixture A</td><td><code>/file.pdf?download=1</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The target includes the query, so it ends in <code>=1</code> and the <code>$</code> anchor fails. No other rule matches.</td></tr>
+        <tr><td>8</td><td>Fixture A</td><td><code>/search?q=x</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td>Rules are matched against path + query. <code>Disallow: /search?</code> is a prefix of the target.</td></tr>
+        <tr><td>9</td><td>Fixture A</td><td><code>/search</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The pattern needs a literal <code>?</code>, which the target does not have.</td></tr>
+        <tr><td>10</td><td>Fixture A</td><td><code>/about.html</code></td><td>corpus</td><td><span class="badge bad">Disallowed</span></td><td>The CairnCorpus group has <code>Disallow: /</code>. Search is unaffected: this opts out of datasets only.</td></tr>
+        <tr><td>11</td><td>Fixture A</td><td><code>/robots.txt</code></td><td>corpus</td><td><span class="badge good">Allowed</span></td><td><code>/robots.txt</code> is always allowed, even under <code>Disallow: /</code>.</td></tr>
+        <tr><td>12</td><td><code>User-agent: Cairn<br>Disallow: /<br><br>User-agent: CairnSearch<br>Allow: /</code></td><td><code>/page</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The role token <code>CairnSearch</code> is tried before the family token <code>Cairn</code>.</td></tr>
+        <tr><td>13</td><td>Same as #12</td><td><code>/page</code></td><td>user</td><td><span class="badge bad">Disallowed</span></td><td>There is no <code>Cairn-User</code> group, so the family token <code>Cairn</code> group applies: <code>Disallow: /</code>.</td></tr>
+        <tr><td>14</td><td><code>User-agent: CairnSearch<br>Disallow: /a<br><br>User-agent: cairnsearch<br>Allow: /a/b</code></td><td><code>/a/b/c</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>Both groups match (case-insensitively) and are merged. <code>Allow: /a/b</code> (4 octets) is longer than <code>Disallow: /a</code> (2).</td></tr>
+        <tr><td>15</td><td><code>User-agent: *<br>Allow: /page<br>Disallow: /page</code></td><td><code>/page.html</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>The two rules are the same length, and on a tie Allow wins.</td></tr>
+        <tr><td>16</td><td><code>User-agent: *<br>Disallow: /%7Euser/</code></td><td><code>/~user/profile</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td><code>%7E</code> encodes the unreserved character <code>~</code>, so it is decoded on both sides and the two paths are equal.</td></tr>
+        <tr><td>17</td><td><code>User-agent: *<br>Disallow: /a%2fb</code></td><td><code>/a%2Fb</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td>Hex digits are uppercased on both sides. <code>%2F</code> is reserved, so it is kept encoded and is <em>not</em> the same as <code>/a/b</code>.</td></tr>
+        <tr><td>18</td><td><code>User-agent: *<br>Disallow:</code></td><td><code>/anything</code></td><td>corpus</td><td><span class="badge good">Allowed</span></td><td>An empty <code>Disallow:</code> is ignored, so nothing is disallowed.</td></tr>
+        <tr><td>19</td><td><code>User-agent: CairnSearch/1.0<br>Disallow: /</code></td><td><code>/</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td>A UA value of the form <code>token/…</code> matches the token <code>CairnSearch</code>.</td></tr>
+        <tr><td>20</td><td><code>User-agent: *<br>Disallow: /*/drafts/</code></td><td><code>/blog/drafts/x.html</code></td><td>search</td><td><span class="badge bad">Disallowed</span></td><td><code>*</code> matches <code>blog</code>. The wildcard can match any segment, and can match more than one.</td></tr>
+        <tr><td>21</td><td><code>Disallow: /</code> (no <code>User-agent</code> line above it)</td><td><code>/page</code></td><td>search</td><td><span class="badge good">Allowed</span></td><td>Rules before the first <code>User-agent</code> line belong to no group and are ignored.</td></tr>
+        <tr><td>22</td><td>robots.txt returns <strong>404</strong></td><td><code>/anything</code></td><td>any</td><td><span class="badge good">Allowed</span></td><td>4xx means "unavailable" (RFC 9309 §2.3.1.3). The allow-all result is cached for 24 h.</td></tr>
+        <tr><td>23</td><td>robots.txt returns <strong>503</strong>, no previous copy</td><td><code>/anything</code></td><td>any</td><td><span class="badge bad">Disallowed</span></td><td>"Unreachable" means disallow-all. It is re-tried after at most 10 minutes.</td></tr>
+        <tr><td>24</td><td>robots.txt returns <strong>503</strong>, a copy from yesterday exists</td><td>depends</td><td>any</td><td><span class="badge warn">Stale rules</span></td><td>Yesterday's rules keep applying (<code>source:'stale'</code>) until a refresh succeeds.</td></tr>
+        <tr><td>25</td><td><code>User-agent: *<br>Crawl-delay: 300</code></td><td><code>/page</code></td><td>any</td><td><span class="badge good">Allowed</span></td><td>At the limit: requests to the host start at least 300 s apart.</td></tr>
+        <tr><td>26</td><td><code>User-agent: *<br>Crawl-delay: 600</code></td><td><code>/page</code></td><td>any</td><td><span class="badge bad">Disallowed</span></td><td>Above 300 s: the fetcher refuses (<code>blocked.robots.crawlDelayLimit: 300</code>). <code>/api/robots/check</code> still shows <code>allowed: true, crawlDelay: 600</code>.</td></tr>
+        <tr><td>27</td><td><code>User-agent: CairnSearch<br>Crawl-delay: 3600<br><br>User-agent: *<br>Crawl-delay: 5</code></td><td><code>/page</code></td><td>search / user</td><td><span class="badge warn">Depends on role</span></td><td><code>CairnSearch</code> uses its own group (3600 s, refused); <code>Cairn-User</code> falls back to <code>*</code> (5 s, allowed).</td></tr>
+      </tbody>
+    </table></div>
+    <p>Rows 2–11 are covered by <code>test/robots.test.js</code> and the fixture end-to-end test. To try any snippet yourself, open the Robots tester in the web UI, or <code>POST /api/robots/check</code> with a <code>robotsTxt</code> field, which returns the decision for all three roles at once.</p>
+    <pre class="code"><code>$ curl -s -X POST http://127.0.0.1:8787/api/robots/check \
+    -H 'Content-Type: application/json' \
+    -d '{"url":"https://example.com/private/public-note.html",
+         "robotsTxt":"User-agent: *\nDisallow: /private/\n\nUser-agent: CairnSearch\nAllow: /private/public-note.html\nDisallow: /private/\n"}'</code></pre>
+
+    <h2 id="compare">10. Comparison with OpenAI, xAI and Anthropic</h2>
+    <p>Cairn's three roles copy the per-purpose split that the large AI crawler operators publish. The main difference is user-triggered fetching.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Purpose</th><th>OpenAI</th><th>xAI</th><th>Anthropic</th><th>Cairn</th></tr></thead>
+      <tbody>
+        <tr><td>Search index</td><td><code>OAI-SearchBot</code>: respects robots.txt. OpenAI says robots.txt changes take about 24 h to affect search.</td><td>Retrieval crawling for Grok's search features, controlled by xAI's published tokens</td><td><code>Claude-SearchBot</code>: respects robots.txt</td><td><code>CairnSearch</code>: always respects robots.txt, with a 24 h cache</td></tr>
+        <tr><td>Training / dataset</td><td><code>GPTBot</code>: respects robots.txt. Disallowing it opts out of training without affecting search.</td><td>Training crawler, separate token</td><td><code>ClaudeBot</code>: respects robots.txt</td><td><code>CairnCorpus</code>: always respects robots.txt, and is independent of search</td></tr>
+        <tr><td>User-triggered fetch</td><td><code>ChatGPT-User</code>: OpenAI states that because these fetches are started by a user, <strong>robots.txt rules may not apply</strong></td><td>User-initiated fetches when Grok follows a link a user asked about</td><td><code>Claude-User</code>: Anthropic states its bots honour robots.txt, and blocking Claude-User stops user-initiated retrieval</td><td><code>Cairn-User</code>: <strong>respects robots.txt by default</strong>. The operator can opt out (<code>respectForUserFetch:false</code>), and every such fetch is logged <code>robots:'skipped'</code>.</td></tr>
+        <tr><td>Family fallback token</td><td>None (each token is separate)</td><td>n/a</td><td>n/a</td><td><code>Cairn</code> covers all roles that have no group of their own</td></tr>
+        <tr><td>Crawl-delay</td><td>Not documented</td><td>n/a</td><td>Documented as supported for ClaudeBot</td><td>Honoured for every role, and never faster than the operator's minimum gap (1 s per host by default)</td></tr>
+        <tr><td>Verification</td><td>Published IP ranges (JSON) per bot</td><td>See xAI's current bot documentation</td><td>Published IP ranges</td><td>IP JSON per role, plus Web Bot Auth signatures (see <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn">The vendor columns describe each operator's public documentation as of 2025–2026, simplified. Vendors change their policies, so check their current bot pages before relying on a detail. The xAI column is deliberately general: its token names and exact robots behaviour have changed between Grok releases.</div>
+
+    <h2 id="impl">11. Implementation map</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Concern</th><th>Where</th><th>Interface</th></tr></thead>
+      <tbody>
+        <tr><td>Parsing, group selection, matching</td><td><code>src/robots/parser.js</code></td><td><code>parseRobots(text)</code>, <code>RobotsTxt.selectGroup / isAllowed / crawlDelay / allowAll / disallowAll</code></td></tr>
+        <tr><td>Fetching, caching, status semantics, single-flight</td><td><code>src/robots/cache.js</code></td><td><code>new RobotsCache({ttlMs, fetchRobots, audit, now, maxEntries})</code> (<code>ttlMs</code> may be a getter; capped by <code>MAX_TTL_MS</code>), <code>get</code>, <code>check</code>, <code>entries</code>, <code>invalidate</code>, <code>clear</code></td></tr>
+        <tr><td>Enforcement before every request and every redirect hop, Crawl-delay limit, private-network screen</td><td><code>src/net/fetcher.js</code></td><td><code>fetcher.fetch(url, {role, respectRobots})</code>, <code>fetcher.checkRobots</code>, <code>MAX_CRAWL_DELAY_SEC</code>, <code>screen()</code></td></tr>
+        <tr><td>Crawl-delay pacing, Retry-After backoff</td><td><code>src/net/ratelimit.js</code></td><td><code>scheduler.schedule(host, fn, {crawlDelaySec})</code>, <code>penalize</code></td></tr>
+        <tr><td>Meta robots, rel=nofollow</td><td><code>src/extract/html.js</code></td><td><code>extractHtml(html, base, {botTokens})</code> → <code>metaRobots</code>, <code>links[].nofollow</code></td></tr>
+        <tr><td>X-Robots-Tag</td><td><code>src/net/fetcher.js</code></td><td><code>parseXRobotsTag(value, tokens)</code> → <code>FetchResult.xRobotsTag</code></td></tr>
+        <tr><td><code>/api/fetch</code> indexing under CairnSearch rules</td><td><code>src/server/api.js</code></td><td><code>indexFetched</code></td></tr>
+        <tr><td>Tests</td><td><code>test/robots.test.js</code>, <code>test/e2e.test.js</code></td><td><code>node --test</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

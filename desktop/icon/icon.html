@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cairn app icon: Aurora Night</title>
+<!--
+  Cairn macOS app icon, concept "Aurora Night".
+  1024 x 1024 canvas, transparent outside an 824 x 824 superellipse body (Apple icon grid,
+  100 px margin), soft drop shadow drawn on a 2D canvas underneath.
+  The body is a single WebGL1 fragment shader: midnight-navy -> indigo field, starfield,
+  vignette, glass bevel, the Cairn "Aurora Orb" (shader adapted from web/avatars/avatar-aurora.html)
+  with its glow spilling onto the field, and a faint tilted orbit ring with a small moon.
+  Hash params:  #t=<flow time>   #size=<px> (render size, default 1024)   #small=1 (simplified 16/32 px master)
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  #stage { position: relative; width: 1024px; height: 1024px; }
+  #stage canvas { position: absolute; left: 0; top: 0; width: 1024px; height: 1024px; display: block; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="shadow" width="1024" height="1024"></canvas>
+  <canvas id="icon" width="1024" height="1024"></canvas>
+</div>
+<script>
+(function () {
+  'use strict';
+  var q = {};
+  (location.hash || '').replace(/^#/, '').split('&').forEach(function (kv) {
+    if (!kv) return; var i = kv.indexOf('=');
+    q[i < 0 ? kv : kv.slice(0, i)] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+  });
+  var SIZE = parseInt(q.size, 10) || 1024;
+  var SMALL = q.small === '1' ? 1 : 0;   // simplified master for the 16/32 px slots
+  var FLOW_T = isFinite(parseFloat(q.t)) ? parseFloat(q.t) : 19.0;
+  var stage = document.getElementById('stage');
+  stage.style.width = stage.style.height = SIZE + 'px';
+
+  // Apple grid in 1024-units.
+  var HALF = 412, N = 5.0;
+
+  // ------------------------------------------------------------ drop shadow (2D)
+  var sc = document.getElementById('shadow');
+  sc.width = sc.height = SIZE; sc.style.width = sc.style.height = SIZE + 'px';
+  var s2 = sc.getContext('2d');
+  var k = SIZE / 1024;
+  function squirclePath(ctx, cx, cy, a) {
+    ctx.beginPath();
+    for (var i = 0; i <= 720; i++) {
+      var th = i / 720 * Math.PI * 2, c = Math.cos(th), s = Math.sin(th);
+      var x = cx + a * Math.sign(c) * Math.pow(Math.abs(c), 2 / N);
+      var y = cy + a * Math.sign(s) * Math.pow(Math.abs(s), 2 / N);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+  // Two-layer shadow: a tight contact shadow and a wide soft one.
+  s2.fillStyle = '#080c26';
+  s2.shadowColor = 'rgba(0, 0, 0, 0.30)'; s2.shadowBlur = 40 * k; s2.shadowOffsetY = 18 * k;
+  squirclePath(s2, SIZE / 2, SIZE / 2, (HALF - 3) * k); s2.fill();
+  s2.shadowColor = 'rgba(0, 0, 0, 0.28)'; s2.shadowBlur = 8 * k; s2.shadowOffsetY = 4 * k;
+  squirclePath(s2, SIZE / 2, SIZE / 2, (HALF - 3) * k); s2.fill();
+
+  // ------------------------------------------------------------ body (WebGL)
+  var canvas = document.getElementById('icon');
+  canvas.width = canvas.height = SIZE; canvas.style.width = canvas.style.height = SIZE + 'px';
+  var gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true });
+  if (!gl) { document.title = 'NO WEBGL'; return; }
+
+  var VS = 'attribute vec2 aPos; void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }';
+  var FS = [
+    'precision highp float;',
+    'uniform vec2 uRes;',
+    'uniform float uTime, uSmall;',
+    // Ashima / Stefan Gustavson 3D simplex noise (MIT).
+    'vec3 mod289(vec3 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 mod289(vec4 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}',
+    'vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314*r;}',
+    'float snoise(vec3 v){',
+    '  const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);',
+    '  vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx);',
+    '  vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g;',
+    '  vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy);',
+    '  vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy;',
+    '  i = mod289(i);',
+    '  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));',
+    '  float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx;',
+    '  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);',
+    '  vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_);',
+    '  vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y);',
+    '  vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw);',
+    '  vec4 s0 = floor(b0)*2.0 + 1.0; vec4 s1 = floor(b1)*2.0 + 1.0; vec4 sh = -step(h, vec4(0.0));',
+    '  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;',
+    '  vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w);',
+    '  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));',
+    '  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;',
+    '  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m * m;',
+    '  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));',
+    '}',
+    'float fbm(vec3 p){ float s = 0.0, a = 0.5;',
+    '  for (int i = 0; i < 4; i++){ s += a * snoise(p); p = p * 1.97 + vec3(3.1, 1.7, 5.3); a *= 0.42; }',
+    '  return s; }',
+    'float fbm2(vec3 p){ return 0.5 * snoise(p) + 0.25 * snoise(p * 2.03 + vec3(3.1, 1.7, 5.3)); }',
+    'mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }',
+    'float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
+    // Signed distance (approx, gradient-normalised) to the superellipse body, in 1024-units.
+    'float sdBody(vec2 p){',
+    '  const float A = 412.0; const float N = 5.0;',
+    '  vec2 q = max(abs(p) / A, vec2(1e-5));',
+    '  float f = pow(q.x, N) + pow(q.y, N);',
+    '  float F = pow(f, 1.0 / N);',
+    '  vec2 g = vec2(pow(q.x, N - 1.0), pow(q.y, N - 1.0)) * pow(f, 1.0 / N - 1.0);',
+    '  return (F - 1.0) * A / max(length(g), 1e-4);',
+    '}',
+    // Sparkle star with four soft spikes.
+    'float sparkle(vec2 p, vec2 c, float s){',
+    '  vec2 d = (p - c) / s;',
+    '  float core = exp(-dot(d, d) * 2.2);',
+    '  float spk = exp(-abs(d.x) * 0.55 - d.y * d.y * 9.0) + exp(-abs(d.y) * 0.55 - d.x * d.x * 9.0);',
+    '  return core + spk * 0.55;',
+    '}',
+    'void main(){',
+    '  float S = uRes.x / 1024.0;',
+    '  vec2 P = (gl_FragCoord.xy - 0.5 * uRes) / S;',     // 1024-units, y up, origin at centre
+    '  float px = 1.0 / S;',                              // one device pixel in 1024-units
+    '  float d = sdBody(P);',
+    '  float body = clamp(0.5 - d / px, 0.0, 1.0);',
+    '  if (body <= 0.0) { gl_FragColor = vec4(0.0); return; }',
+    '  vec2 b = P / 412.0;',
+    '  float t = uTime;',
+    // ---------- field: midnight navy -> indigo, with faint nebula haze
+    '  vec3 cTop = vec3(0.150, 0.135, 0.430);',
+    '  vec3 cMid = vec3(0.058, 0.074, 0.260);',
+    '  vec3 cBot = vec3(0.028, 0.034, 0.135);',
+    '  float gy = b.y * 0.5 + 0.5;',
+    '  vec3 bg = mix(cBot, cMid, smoothstep(0.0, 0.55, gy));',
+    '  bg = mix(bg, cTop, smoothstep(0.45, 1.05, gy));',
+    '  float neb = fbm2(vec3(b * 1.6, 2.0)) * 0.5 + 0.5;',
+    '  bg += vec3(0.30, 0.16, 0.55) * 0.10 * smoothstep(0.35, 0.9, neb) * smoothstep(-0.2, 0.9, b.x + b.y);',
+    '  bg += vec3(0.05, 0.30, 0.45) * 0.06 * smoothstep(0.4, 0.9, 1.0 - neb) * smoothstep(0.2, -0.9, b.x + b.y * 0.3);',
+    '  bg *= 1.0 - 0.30 * smoothstep(0.60, 1.45, length(b * vec2(1.0, 0.95)));',
+    '  bg *= 1.0 + 0.55 * uSmall;',   // small master: lift the field so the squircle reads on dark docks
+    // ---------- orb geometry
+    '  vec2 C = vec2(0.0, 6.0);',
+    '  float R = mix(266.0, 300.0, uSmall);',
+    '  vec2 op = (P - C) / R;',
+    '  float r = length(op);',
+    // ---------- stars (hash grid), hidden near the orb glow
+    '  float cs = 34.0;',
+    '  vec2 cell = floor(P / cs);',
+    '  vec2 fc = P - cell * cs;',
+    '  float h0 = hash(cell + 0.17);',
+    '  vec2 spos = vec2(hash(cell + 1.31), hash(cell + 7.13)) * (cs - 12.0) + 6.0;',
+    '  float br = step(0.70, h0) * (0.25 + 0.75 * pow(hash(cell + 3.37), 2.5));',
+    '  float srad = 0.9 + 1.7 * br;',
+    '  float sdist = length(fc - spos);',
+    '  float star = br * (smoothstep(srad + 0.9, srad - 0.9, sdist) * 0.9 + 0.35 * exp(-sdist * sdist / (srad * srad * 5.0)));',
+    '  star *= smoothstep(1.25, 1.75, r) * (0.55 + 0.45 * smoothstep(-0.6, 0.8, b.y));',
+    '  vec3 starCol = mix(vec3(0.75, 0.82, 1.0), vec3(1.0, 0.95, 0.88), hash(cell + 9.1));',
+    '  bg += starCol * star * 0.85 * (1.0 - uSmall);',
+    '  float spk = sparkle(P, vec2(-268.0, 268.0), 9.0) * 0.95 + sparkle(P, vec2(292.0, -236.0), 6.5) * 0.65 + sparkle(P, vec2(236.0, 316.0), 5.0) * 0.55;',
+    '  bg += vec3(0.86, 0.92, 1.0) * spk * (1.0 - uSmall);',
+    // ---------- orb glow spilling onto the field
+    '  vec3 glowCol = vec3(0.30, 0.52, 1.00);',
+    '  float dd = max(r - 1.0, 0.0);',
+    '  float glow = exp(-dd * 3.2) * 0.42 + exp(-dd * 11.0) * 0.50;',
+    '  bg += glowCol * glow * 0.85;',
+    '  bg += vec3(0.50, 0.38, 1.0) * exp(-dd * 1.6) * 0.08;',
+    // ---------- orbit ring (tilted ellipse), back half behind the orb, front half over it
+    '  float tilt = radians(-17.0);',
+    '  vec2 rp = rot(-tilt) * (P - C);',
+    '  float RA = 1.36 * R, KY = 0.24;',
+    '  vec2 e = vec2(rp.x, rp.y / KY);',
+    '  float el = length(e);',
+    '  vec2 eg = vec2(e.x, e.y / KY) / max(el, 1e-3);',
+    '  float edist = (el - RA) / max(length(eg), 1e-3);',
+    '  float ang = atan(e.y, e.x);',
+    '  float front = step(e.y, 0.0);',
+    // brightness along the ring: strongest front-right, fading towards the back-left
+    '  float along = (0.06 + 0.94 * pow(max(0.5 + 0.5 * cos(ang + 0.85), 0.0), 2.2)) * (1.0 - uSmall);',
+    '  float ringW = 2.4;',
+    '  float ringCore = smoothstep(ringW + px, ringW - px, abs(edist));',
+    '  float ringHalo = exp(-edist * edist / 260.0);',
+    '  float ring = (ringCore * 0.80 + ringHalo * 0.26) * along;',
+    '  vec3 ringCol = vec3(0.70, 0.88, 1.00);',
+    '  vec2 moonP = C + rot(tilt) * vec2(RA * cos(-0.62), RA * KY * sin(-0.62));',
+    '  float md = length(P - moonP);',
+    '  float moon = smoothstep(14.0 + px, 14.0 - px, md) * (1.0 - uSmall);',
+    '  float moonGlow = exp(-md * md / 1800.0) * 0.50 * (1.0 - uSmall);',
+    '  vec3 col = bg;',
+    // back half of the ring: drawn on the field, masked by the orb later
+    '  col += ringCol * ring * (1.0 - front) * 0.7;',
+    // ---------- the Aurora Orb
+    '  float cover = 1.0 - smoothstep(1.0 - 1.6 / R * px, 1.0, r);',
+    '  if (cover > 0.0) {',
+    '    float rc = min(r, 0.998);',
+    '    float z = sqrt(1.0 - rc * rc);',
+    '    vec3 n = vec3(op * (rc / max(r, 1e-4)), z);',
+    '    vec3 qn = n;',
+    '    qn.xz = rot(t * 0.10) * qn.xz;',
+    '    qn.yz = rot(0.35 + 0.06 * sin(t * 0.07)) * qn.yz;',
+    '    vec3 w = vec3(snoise(qn * 0.7 + vec3(0.0, 0.0, t * 0.12)),',
+    '                  snoise(qn * 0.7 + vec3(4.7, 2.3, -t * 0.10)),',
+    '                  snoise(qn * 0.7 + vec3(1.9, 7.1, t * 0.09)));',
+    '    float fq = mix(0.78, 0.60, uSmall);',
+    '    vec3 qw = qn * fq + w * mix(0.42, 0.30, uSmall);',
+    '    float fA = fbm(qw + vec3(0.0, t * 0.06, 0.0));',
+    '    vec3 qd = vec3(n.xy * 0.70, -z * 0.45);',
+    '    qd.xz = rot(-t * 0.07) * qd.xz;',
+    '    float fB = fbm2(qd * 1.25 + w * 0.30 + vec3(t * 0.05, 0.0, 3.0));',
+    '    float diag = dot(n.xy, vec2(-0.62, 0.78)) * 0.5 + 0.5;',
+    '    vec3 c0 = vec3(0.09, 0.20, 0.68), c1 = vec3(0.24, 0.74, 1.00), c2 = vec3(0.55, 0.38, 1.00), c3 = vec3(0.94, 0.97, 1.00);',
+    '    vec3 oc = mix(c0, c2, smoothstep(-0.40, 0.45, fB * 1.2 + (0.5 - diag) * 0.70));',
+    '    oc = mix(oc, c1, smoothstep(-0.30, 0.55, fA * 1.0 + (diag - 0.5) * 1.3) * 0.9);',
+    '    float cloud = smoothstep(-0.02, 0.66, fA * 0.85 + fB * 0.30 + (diag - 0.5) * 0.75);',
+    '    oc = mix(oc, c3, pow(cloud, 1.6) * 0.74);',
+    '    oc *= 0.80 + 0.34 * diag;',
+    '    oc *= 1.0 - 0.22 * smoothstep(0.55, 0.93, r) * (1.0 - smoothstep(0.93, 0.99, r));',
+    '    float fres = pow(1.0 - z, 2.4);',
+    '    vec3 rimCol = mix(c1, c3, 0.45);',
+    '    oc = mix(oc, rimCol, fres * 0.55);',
+    '    oc += rimCol * pow(1.0 - z, 8.0) * 0.40;',
+    '    float cy = op.y + 0.80;',
+    '    float caust = exp(-(op.x * op.x * 2.4 + cy * cy * 12.0));',
+    '    oc += mix(c1, c3, 0.55) * caust * 0.30;',
+    '    vec2 sp = (op - vec2(-0.32, 0.46)) * vec2(1.0, 1.5);',
+    '    float gloss = exp(-dot(sp, sp) * 5.5);',
+    '    vec2 sp2 = (op - vec2(-0.36, 0.52)) * vec2(1.0, 1.3);',
+    '    float spec = exp(-dot(sp2, sp2) * 110.0);',
+    '    float cres = smoothstep(0.95, 0.90, r) * smoothstep(1.02, 1.10, length(op - vec2(0.05, -0.20)));',
+    '    cres *= smoothstep(-0.1, 0.7, op.y - op.x * 0.35);',
+    '    oc = mix(oc, vec3(1.0), clamp(gloss * 0.22 + spec * 0.85 + cres * 0.20, 0.0, 1.0));',
+    // crisp glass edge line
+    '    float el0 = (r - 0.988) / 0.010; float edgeLine = exp(-el0 * el0);',
+    '    oc += vec3(0.75, 0.90, 1.0) * edgeLine * (0.25 + 0.35 * smoothstep(-0.2, 0.9, -op.x * 0.4 + op.y));',
+    '    float gd = r - 0.96; float glint = exp(-gd * gd * 900.0) * smoothstep(0.45, 0.95, dot(op / max(r, 1e-3), vec2(0.62, -0.78)));',
+    '    oc += vec3(0.65, 0.85, 1.0) * glint * 0.30;',
+    '    col = mix(col, oc, cover);',
+    '  }',
+    // front half of the ring + moon, over everything
+    '  col += ringCol * ring * front;',
+    '  col = mix(col, vec3(0.93, 0.97, 1.0), moon);',
+    '  col += vec3(0.55, 0.78, 1.0) * moonGlow * (1.0 - moon);',
+    '  if (moon > 0.0) {',
+    '    vec2 mq = (P - moonP) / 14.0;',
+    '    float msh = smoothstep(-0.2, 1.0, -mq.x * 0.5 - mq.y * 0.8);',
+    '    col = mix(col, col * vec3(0.62, 0.74, 0.98), msh * moon * 0.75);',
+    '  }',
+    // ---------- glass bevel on the body edge
+    '  float inner = exp(d / 3.0);',
+    '  float inner2 = exp(d / 14.0);',
+    '  float topness = smoothstep(-0.3, 1.0, b.y);',
+    '  col += vec3(0.62, 0.70, 1.0) * inner * (0.16 + 0.40 * topness + 0.20 * uSmall);',
+    '  col += vec3(0.45, 0.52, 1.0) * inner2 * 0.07 * topness;',
+    '  col *= 1.0 - inner2 * 0.10 * (1.0 - topness);',
+    // dither to kill gradient banding
+    '  col += (hash(gl_FragCoord.xy) - 0.5) * (1.6 / 255.0);',
+    '  col = clamp(col, 0.0, 1.0);',
+    '  gl_FragColor = vec4(col * body, body);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { document.title = 'SHADER ERR'; throw new Error(gl.getShaderInfoLog(s)); }
+    return s;
+  }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var loc = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.viewport(0, 0, SIZE, SIZE);
+  gl.uniform2f(gl.getUniformLocation(prog, 'uRes'), SIZE, SIZE);
+  gl.uniform1f(gl.getUniformLocation(prog, 'uTime'), FLOW_T);
+  gl.uniform1f(gl.getUniformLocation(prog, 'uSmall'), SMALL);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  document.title = 'OK';
+})();
+</script>
+</body>
+</html>

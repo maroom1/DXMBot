@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overview — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Cairn overview</h1>
+    <p class="lead">Cairn is a <strong>personal desktop assistant for macOS</strong>, in the style of ChatGPT Agent and Grok. A small animated avatar floats above your windows. Click it and ask for something: a reminder, a recurring task, a piece of research, a shopping comparison, or a job on your Mac. Each request runs in the background while you keep working, and anything risky waits for your approval. The brain is the Claude CLI (<code>claude -p</code>, using your own login). Web search is handled by Cairn's own <strong>transparent, robots.txt-respecting search and crawl engine</strong>, which the assistant uses as its search skill.</p>
+
+    <style>
+      .avatar-hero { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 18px 16px; margin: 0 0 10px; }
+      .avatar-hero figure { margin: 0; width: 150px; text-align: center; }
+      .avatar-hero iframe { display: block; margin: 0 auto; width: 120px; height: 120px; border: 0; background: transparent; }
+      .avatar-hero figcaption { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+      .avatar-hero figcaption strong { display: block; color: var(--text); font-size: 14px; }
+      .hero-links { text-align: center; font-size: 14px; margin: 0 0 24px; color: var(--muted); }
+    </style>
+    <div class="avatar-hero" role="group" aria-label="The three Cairn avatars, live">
+      <figure>
+        <iframe src="../web/avatars/avatar-aurora.html#state=idle" width="120" height="120" title="Aurora Orb avatar, idle" loading="lazy" allowtransparency="true"></iframe>
+        <figcaption><strong>Aurora Orb</strong>A glass sphere of flowing blue and violet light (WebGL)</figcaption>
+      </figure>
+      <figure>
+        <iframe src="../web/avatars/avatar-dots.html#state=idle" width="120" height="120" title="Constellation Dots avatar, idle" loading="lazy" allowtransparency="true"></iframe>
+        <figcaption><strong>Constellation Dots</strong>A breathing cluster of points that swirls while it works</figcaption>
+      </figure>
+      <figure>
+        <iframe src="../web/avatars/avatar-buddy.html#state=idle" width="120" height="120" title="Buddy avatar, idle" loading="lazy" allowtransparency="true"></iframe>
+        <figcaption><strong>Buddy</strong>A friendly character with a face that blinks and reacts</figcaption>
+      </figure>
+    </div>
+    <p class="hero-links">These are the real avatars, running live in this page. Choose one from the bubble's right-click <em>Avatar</em> menu. See every state in the <a href="../web/avatars/gallery.html">avatar gallery</a> or on the <a href="desktop.html#avatar-states">Floating bubble app</a> page.</p>
+
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#assistant">What the assistant does</a></li>
+      <li><a href="#system">The whole system at a glance</a></li>
+      <li><a href="#quickstart">Quick start</a></li>
+      <li><a href="#what">The search skill: Cairn's crawl engine</a></li>
+      <li><a href="#isnt">What Cairn is not</a></li>
+      <li><a href="#glance">Search engine architecture</a></li>
+      <li><a href="#roles">The three crawler roles</a></li>
+      <li><a href="#ask">How a question is answered</a></li>
+      <li><a href="#highlights">Highlights</a></li>
+      <li><a href="#data">Where data lives</a></li>
+      <li><a href="#pagemap">Page map</a></li>
+    </ol></div>
+
+    <h2 id="assistant">What the assistant does</h2>
+    <div class="cards">
+      <div class="card"><h3>Floating avatar bubble</h3><p>A native <code>Cairn.app</code> puts a small animated avatar (about 88 px) above every window and on every Space. Drag it anywhere. Click it to open the chat panel, or press ⌥Space. The avatar shows at a glance whether Cairn is idle, working, waiting for you or offline. See <a href="desktop.html">Floating bubble app</a>.</p></div>
+      <div class="card"><h3>Always-on background tasks</h3><p>Every request becomes a background run that keeps going after you close the panel. Up to three run at once and the rest queue. The Activity tab lists them, and a macOS notification tells you when each one finishes.</p></div>
+      <div class="card"><h3>Reminders and recurring tasks</h3><p>"Remind me to call Sam at 5pm", "every weekday at 8:30 summarise the news". The scheduler fires one-time reminders and recurring agent tasks, including tasks that run unattended. It can also add items to Reminders.app and Calendar.app when you ask.</p></div>
+      <div class="card"><h3>Search and research</h3><p>Quick answers and multi-step research with cited sources. Claude's web search is combined with Cairn's own index and its compliant, signed, audited fetcher.</p></div>
+      <div class="card"><h3>Shopping with checkout hand-off</h3><p>Asks what you need, compares products in a table (product, store, price, rating, link), keeps a shopping list and can add items to a cart. It <strong>never pays</strong>: it hands you the checkout link.</p></div>
+      <div class="card"><h3>Computer tasks with approvals</h3><p>Files, the terminal, Mac apps, the clipboard and a visible Playwright browser. Reading is automatic. Commands, file writes, clicks and form fills show an Approve / Deny / Always allow card first.</p></div>
+      <div class="card"><h3>Claude CLI brain</h3><p><code>claude -p --output-format stream-json</code> with your Enterprise login, <code>--resume</code> for conversation memory, a per-run budget cap and a permission-prompt tool that routes every risky call to you.</p></div>
+      <div class="card"><h3>Local and inspectable</h3><p>One Node.js 20 process on <code>127.0.0.1</code> with zero npm dependencies. Conversations, runs, tasks and the shopping list are plain JSON files in the data directory.</p></div>
+    </div>
+    <p>The full catalogue, compared with ChatGPT Agent, ChatGPT Tasks and Grok, is on the <a href="assistant.html">Desktop assistant</a> page. The feature table is in <a href="features.html#assistant-features">Feature catalogue</a>.</p>
+
+    <h2 id="system">The whole system at a glance</h2>
+    <div class="diagram-title">Figure 1 — From the bubble to your Mac, the web and your files</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef person fill:#dbeafe,stroke:#3b82f6,color:#172554
+  classDef native fill:#fce7f3,stroke:#db2777,color:#500724
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+
+  YOU(["You"]):::person
+  subgraph APP ["Cairn.app, native Swift"]
+    BUB["Avatar bubble<br/>web/avatars/*.html<br/>idle, working, attention, offline"]:::native
+    PANEL["Chat panel<br/>WKWebView: web/bubble.html"]:::native
+  end
+  subgraph SRV ["node bin/cairn.js serve on 127.0.0.1:8787"]
+    API["HTTP API + SSE<br/>/api/assistant/* and /api/*"]:::core
+    subgraph ASST ["Assistant, src/assistant/"]
+      AGENT["AssistantAgent<br/>background runs, queue"]:::core
+      APPR["ApprovalQueue<br/>Approve / Deny / Always"]:::core
+      SCHED["TaskScheduler<br/>reminders, recurring tasks"]:::core
+    end
+    ENGINE["Search skill<br/>crawl engine, BM25 index, compliant fetcher"]:::core
+  end
+  CLAUDE["claude -p<br/>stream-json, --resume"]:::proc
+  subgraph MCP ["MCP tool servers"]
+    T1["assistant<br/>src/assistant/mcp-tools.js"]:::proc
+    T2["cairn<br/>src/agent/mcp-server.js"]:::proc
+    T3["playwright<br/>npx @playwright/mcp"]:::proc
+  end
+  MAC["Mac apps<br/>Notifications, Reminders, Calendar, open, clipboard"]:::ext
+  WEB[("The web")]:::ext
+  FILES[("Your files and terminal")]:::ext
+
+  YOU -->|"click, drag, type"| BUB
+  BUB --> PANEL
+  BUB -->|"poll /api/assistant/health every 3 s"| API
+  PANEL -->|"fetch + EventSource"| API
+  API --> AGENT
+  API --> APPR
+  API --> SCHED
+  SCHED -->|"due agent task"| AGENT
+  AGENT -->|"spawn, prompt on stdin"| CLAUDE
+  CLAUDE -->|"stdio JSON-RPC"| T1
+  CLAUDE -->|"stdio JSON-RPC"| T2
+  CLAUDE -->|"stdio JSON-RPC"| T3
+  T1 -->|"HTTP loopback"| API
+  T2 -->|"HTTP loopback"| API
+  T1 -.->|"approval_prompt"| APPR
+  API --> ENGINE
+  API -->|"osascript, open, pbcopy"| MAC
+  ENGINE -->|"robots-checked, signed"| WEB
+  T3 -->|"visible browser"| WEB
+  CLAUDE -->|"Read, Bash, Write after approval"| FILES
+    </pre></div>
+    <p class="diagram-caption">The bubble and panel only talk to the local server. The server owns the agent, the approval queue and the scheduler. Claude reaches your Mac and the web only through its tools: the <code>assistant</code> and <code>cairn</code> MCP servers call back into the same loopback API, and every tool that changes something goes through the <code>approval_prompt</code> permission tool first. See <a href="architecture.html#assistant-layer">Architecture: Assistant layer</a>.</p>
+
+    <h2 id="quickstart">Quick start</h2>
+    <p>Requirements: macOS, Node.js 20 or later, and the Claude CLI logged in (<code>claude</code> on <code>PATH</code>, or <code>CAIRN_CLAUDE_BIN</code>). Building the bubble also needs the Xcode Command Line Tools (<code>swiftc</code>). Without Claude, Cairn still crawls, indexes and searches, and gives extractive answers.</p>
+    <pre class="code"><code># 1. Start the server: web dashboard, assistant API and docs
+$ node bin/cairn.js serve                  # → http://127.0.0.1:8787  (docs at /docs/, bubble UI at /web/bubble.html)
+
+# 2. Install the floating bubble in /Applications, keep it in the Dock and start it (builds desktop/build/Cairn.app
+#    if needed; --no-dock leaves the Dock alone); afterwards start it from the Dock, Spotlight (⌘Space › Cairn),
+#    the Apps view / Launchpad, or: node bin/cairn.js desktop
+$ node bin/cairn.js desktop --install
+
+# 3. Run the whole test suite (node:test, loopback only)
+$ npm test
+
+# 4. Search-engine demo: start the Northwind Trails fixture site, crawl it,
+#    search it and ask a quick question
+$ node bin/cairn.js demo
+
+# 5. Talk to the assistant from the terminal
+$ node bin/cairn.js chat "Remind me to stretch in 20 minutes"</code></pre>
+    <p>More commands (<code>remind</code>, <code>tasks</code>, <code>approvals</code>, <code>shopping</code>, <code>assistant</code>, and the engine commands <code>crawl</code>, <code>ask</code>, <code>robots</code>, <code>doctor</code>) are in the <a href="cli.html">CLI reference</a>.</p>
+    <div class="callout">Environment overrides: <code>CAIRN_PORT</code>, <code>CAIRN_HOST</code>, <code>CAIRN_PUBLIC_URL</code>, <code>CAIRN_CONTACT</code>, <code>CAIRN_HOME</code> (data directory), <code>CAIRN_CLAUDE_BIN</code> and <code>CAIRN_MODEL</code>. Engine settings are saved to <code>data/config.json</code>, and assistant settings (model, budget, working directory, browser, notifications, concurrency) to <code>data/assistant-settings.json</code>.</div>
+
+    <h2 id="what">The search skill: Cairn's crawl engine</h2>
+    <p>When the assistant searches or researches, it can use Cairn's own engine: a local, transparent, robots.txt-respecting web retrieval and answer engine. It crawls and indexes sites under an honest identity, answers questions with citations, and runs a research agent that can only reach the web through Cairn's compliant fetcher. The same engine is exposed to Claude as the <code>cairn</code> MCP server.</p>
+    <p>The engine copies the <em>shape</em> of the production AI bot families. OpenAI runs <code>OAI-SearchBot</code>, <code>GPTBot</code> and <code>ChatGPT-User</code>. xAI's crawler family covers training crawls, DeepSearch retrieval and user-triggered fetches. Anthropic runs <code>ClaudeBot</code>, <code>Claude-SearchBot</code> and <code>Claude-User</code>. Cairn follows the same pattern: one product with one robots.txt token per purpose, so a site owner can allow search, refuse dataset collection and decide separately about fetches that a person triggered.</p>
+    <ul>
+      <li><strong>A search indexer</strong> (<code>CairnSearch</code>) that crawls politely, follows sitemaps and honours robots.txt (RFC 9309), meta robots and <code>X-Robots-Tag</code>, then builds a local BM25 index.</li>
+      <li><strong>A corpus collector</strong> (<code>CairnCorpus</code>) that writes JSONL datasets. Site owners can opt out of it without affecting search.</li>
+      <li><strong>A user-triggered fetcher</strong> (<code>Cairn-User</code>) for the Ask view, the Fetch inspector and the research agent. Unlike <code>ChatGPT-User</code> or <code>Google-Agent</code>, it <strong>respects robots.txt by default</strong>.</li>
+      <li><strong>An answer engine</strong> that retrieves passages and has the Claude CLI write a grounded, cited answer. If Claude is unavailable it falls back to an extractive answer.</li>
+      <li><strong>A deep research agent</strong>: Claude CLI with every built-in tool disabled and exactly five MCP tools that proxy to Cairn's HTTP API. The agent is therefore bound by the same robots, rate-limit and audit rules as everything else.</li>
+      <li><strong>A verifiable identity</strong>: requests carry HTTP Message Signatures (RFC 9421, Ed25519) per the IETF Web Bot Auth architecture, and the public keys are published at <code>/.well-known/http-message-signatures-directory</code>.</li>
+    </ul>
+
+    <h2 id="isnt">What Cairn is not</h2>
+    <div class="cards">
+      <div class="card"><h3>Not a stealth scraper</h3><p>The search engine never spoofs a browser User-Agent, rotates IPs, solves CAPTCHAs or mimics browser fingerprints. See <a href="features.html#not-implemented">deliberately not implemented</a>.</p></div>
+      <div class="card"><h3>Not a hosted service</h3><p>A single local Node.js process bound to <code>127.0.0.1</code>, plus the bubble app. Tasks run only while your Mac is awake. It has no accounts and no multi-tenant isolation, and it is not meant to be exposed to a network.</p></div>
+      <div class="card"><h3>The crawler is not a browser</h3><p>The search engine runs no JavaScript and no headless Chrome. It fetches HTML and text, extracts them and indexes them. For interactive web tasks the assistant instead drives a <em>visible</em> Playwright browser on your Mac, and clicks or typing need your approval.</p></div>
+      <div class="card"><h3>Not an access-control system</h3><p>robots.txt is a request, not a lock. Cairn honours it, but that does nothing to stop other clients. See <a href="security.html#not-protected">what is not protected</a>.</p></div>
+    </div>
+
+    <h2 id="glance">Search engine architecture</h2>
+    <div class="diagram-title">Figure 2 — Search engine components and trust boundaries</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph OP ["Operator machine"]
+    UI["Web UI<br/>web/index.html"]
+    CLI["CLI<br/>bin/cairn.js"]
+  end
+  subgraph CORE ["Cairn process on 127.0.0.1:8787"]
+    API["HTTP API + SSE<br/>src/server/"]
+    JOBS["JobManager and CrawlJob<br/>src/crawl/"]
+    FETCH["Fetcher<br/>src/net/fetcher.js"]
+    ROBOTS["RobotsCache + parser<br/>src/robots/"]
+    SCHED["HostScheduler<br/>src/net/ratelimit.js"]
+    SIGN["Signer - Web Bot Auth<br/>src/net/signing.js"]
+    EXTRACT["HTML and sitemap extract<br/>src/extract/"]
+    INDEX["SearchIndex - BM25<br/>src/index/store.js"]
+    ANSWER["Quick answer - RAG<br/>src/agent/answer.js"]
+    RESEARCH["Deep research<br/>src/agent/research.js"]
+    AUDIT["AuditLog<br/>src/util/audit.js"]
+  end
+  subgraph AG ["Claude CLI subprocess"]
+    CLAUDE["claude -p<br/>built-in tools disabled"]
+    MCP["MCP server - 5 tools<br/>src/agent/mcp-server.js"]
+  end
+  WEB[("Public websites")]
+  DATA[("data/ directory")]
+  UI -->|"JSON + SSE"| API
+  CLI --> API
+  API --> JOBS
+  API --> ANSWER
+  API --> RESEARCH
+  JOBS --> FETCH
+  JOBS --> EXTRACT
+  JOBS --> INDEX
+  FETCH --> ROBOTS
+  FETCH --> SCHED
+  FETCH --> SIGN
+  FETCH --> AUDIT
+  FETCH -->|"honest UA + signature"| WEB
+  ANSWER --> INDEX
+  ANSWER --> CLAUDE
+  RESEARCH --> CLAUDE
+  CLAUDE -->|"stdio JSON-RPC"| MCP
+  MCP -->|"HTTP loopback /api/*"| API
+  INDEX --> DATA
+  AUDIT --> DATA
+    </pre></div>
+    <p class="diagram-caption">Every outbound request goes through the single <code>Fetcher</code>, which applies robots, politeness and signing and writes an audit entry. That includes requests the Claude agent makes, which loop back through the MCP server into the same HTTP API. For C4-style detail see <a href="architecture.html">Architecture</a>.</p>
+
+    <h2 id="roles">The three crawler roles</h2>
+    <p>Each role has its own robots.txt token. The family token <code>Cairn</code> is a fallback group, so <code>robotsTokens(role)</code> returns <code>[roleToken, 'Cairn']</code>. When neither token has a group, the merged <code>*</code> group applies.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Role id</th><th>robots token</th><th>Purpose</th><th>Triggered by</th><th>robots.txt</th><th>Modelled on</th><th>IP ranges</th></tr></thead>
+      <tbody>
+        <tr><td><code>search</code></td><td><code>CairnSearch</code></td><td>Discover and index public pages so they can be cited in answers</td><td>Automatic crawl jobs</td><td><span class="badge good">Always respected</span></td><td>OAI-SearchBot, Claude-SearchBot, xAI retrieval crawl</td><td><code>/bot/cairnsearch.json</code></td></tr>
+        <tr><td><code>corpus</code></td><td><code>CairnCorpus</code></td><td>Collect pages into <code>data/corpus/&lt;jobId&gt;.jsonl</code> for evaluation or training. Never added to the search index</td><td>Explicit corpus crawl jobs only</td><td><span class="badge good">Always respected</span></td><td>GPTBot, ClaudeBot, Google-Extended, xAI training crawl</td><td><code>/bot/cairncorpus.json</code></td></tr>
+        <tr><td><code>user</code></td><td><code>Cairn-User</code></td><td>Fetch one page because a person asked (Ask, Fetch inspector, research agent)</td><td>A user action</td><td><span class="badge good">Respected by default</span><br><code>config.robots.respectForUserFetch</code></td><td>ChatGPT-User, Claude-User, Google-Agent</td><td><code>/bot/cairn-user.json</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>User-Agent format (from <code>src/identity.js</code>). It keeps the conventional <code>compatible;</code> prefix used by the OpenAI bots, but always names the real product token and links to an information page:</p>
+    <pre class="code"><code>Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; CairnSearch/1.0; +http://127.0.0.1:8787/bot</code></pre>
+    <div class="diagram-title">Figure 3 — Which robots.txt group governs a request</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  R["Request by role"] --> T1{"Group for role token?<br/>CairnSearch / CairnCorpus / Cairn-User"}
+  T1 -->|"yes"| G1["Use merged role-token groups"]
+  T1 -->|"no"| T2{"Group for family token Cairn?"}
+  T2 -->|"yes"| G2["Use merged Cairn groups"]
+  T2 -->|"no"| T3{"Any * group?"}
+  T3 -->|"yes"| G3["Use merged * groups"]
+  T3 -->|"no"| G4["Allow everything"]
+  G1 --> M["Longest match wins<br/>allow wins ties"]
+  G2 --> M
+  G3 --> M
+    </pre></div>
+    <p class="diagram-caption">Tokens are matched case-insensitively. <code>/robots.txt</code> itself is always fetchable. The full rules are on the <a href="robots.html">robots.txt compliance</a> page.</p>
+
+    <h2 id="ask">How a question is answered</h2>
+    <div class="diagram-title">Figure 4 — Quick answer, then deep research</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as Operator
+  participant S as Cairn server
+  participant I as SearchIndex
+  participant C as Claude CLI
+  participant M as MCP server
+  participant F as Fetcher
+  U->>S: Ask (quick)
+  S->>I: searchPassages(question)
+  I-->>S: numbered passages
+  S->>C: sources + question via stdin, no tools
+  C-->>S: markdown answer citing [1] [2]
+  S-->>U: answer + citations (SSE stream)
+  U->>S: Ask (deep)
+  S->>C: research prompt, 5 allow-listed MCP tools
+  loop until the agent has enough evidence
+    C->>M: search_index / fetch_page / crawl_site
+    M->>S: POST /api/search or /api/fetch
+    S->>F: fetch as Cairn-User
+    F-->>S: page or robots refusal
+    S-->>M: result
+    M-->>C: text + source id [n]
+  end
+  C-->>S: final cited answer
+  S-->>U: answer, citations, step timeline
+    </pre></div>
+    <p class="diagram-caption">In both modes the model only sees text that Cairn retrieved, and it cites sources by the stable <code>[n]</code> ids that Cairn assigned. See <a href="agent.html">Claude agent &amp; MCP</a>.</p>
+
+    <h2 id="highlights">Highlights</h2>
+    <div class="cards">
+      <div class="card"><h3>Honest identity</h3><p>Three role tokens, one family token, a <code>+…/bot</code> info URL, a <code>From:</code> contact header and IP range JSON files per role.</p></div>
+      <div class="card"><h3>Independent opt-outs</h3><p>Blocking <code>CairnCorpus</code> keeps a site out of datasets while leaving search untouched, in the same way GPTBot and OAI-SearchBot are separate.</p></div>
+      <div class="card"><h3>RFC 9309 robots</h3><p>Longest match wins and allow wins ties. Supports <code>*</code> and <code>$</code>, a 500 KiB parse limit, 4xx→allow and 5xx→disallow, and a stale copy on errors. Robots are rechecked on every redirect hop.</p></div>
+      <div class="card"><h3>Polite by default</h3><p>One request in flight per host, at least 1 s between requests, <code>Crawl-delay</code> honoured, and exponential backoff on 429/503 that respects <code>Retry-After</code>.</p></div>
+      <div class="card"><h3>Page-level signals</h3><p>Meta robots, bot-scoped <code>&lt;meta name="CairnSearch"&gt;</code>, <code>X-Robots-Tag</code> (including the <code>CairnSearch: noindex</code> form), <code>rel=nofollow</code>, canonical links, noarchive and nosnippet.</p></div>
+      <div class="card"><h3>Web Bot Auth</h3><p>Requests are signed with Ed25519 (RFC 9421). The key directory is at <code>/.well-known/http-message-signatures-directory</code> and there is a verifier endpoint for site owners.</p></div>
+      <div class="card"><h3>Cited answers</h3><p>Retrieval over a BM25 index, grounded prompting and <code>[n]</code> citations, streamed over SSE. The extractive fallback works without Claude.</p></div>
+      <div class="card"><h3>Contained research agent</h3><p>Claude CLI runs with built-in tools disabled, five MCP tools, a spending cap, a timeout and an empty working directory.</p></div>
+      <div class="card"><h3>Full audit trail</h3><p>Every HTTP attempt, robots decision, crawl event and agent run goes to <code>data/audit.ndjson</code>, and a live stream is available in the UI.</p></div>
+      <div class="card"><h3>Zero dependencies</h3><p>Uses only <code>node:*</code> built-ins on Node.js 20 or later, with tests on <code>node:test</code>. There is no supply chain beyond Node and the Claude CLI.</p></div>
+    </div>
+
+    <h3 id="engine-commands">Search engine commands</h3>
+    <p>The engine works on its own, without the assistant. These commands drive it directly (the site-owner page is at <code>http://127.0.0.1:8787/bot</code> while <code>serve</code> runs):</p>
+    <pre class="code"><code>$ node bin/cairn.js doctor           # node version, claude availability, data dir, signing key
+$ node bin/cairn.js fixture --port 8788
+$ node bin/cairn.js crawl http://127.0.0.1:8788/ --max-pages 30
+$ node bin/cairn.js robots http://127.0.0.1:8788/private/secret.html
+$ node bin/cairn.js ask "How much does the Ridgeback 45 weigh?"
+$ node bin/cairn.js ask --deep "What is the return window and the pack warranty?"
+$ node bin/cairn.js keys             # JWKS + keyid used for Web Bot Auth</code></pre>
+
+    <h2 id="data">Where data lives</h2>
+    <div class="diagram-title">Figure 5 — The data/ directory</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  D[("data/")] --> C["config.json<br/>editable settings"]
+  D --> A["audit.ndjson<br/>append-only request log"]
+  D --> X["index.json<br/>search index documents"]
+  D --> K["keys/<br/>ed25519-private.pem 0600<br/>ed25519-public.pem"]
+  D --> P["corpus/<br/>one JSONL per corpus job"]
+  D --> W["agent-work/<br/>empty cwd for Claude CLI"]
+  D --> CV["conversations/<br/>one JSON per chat + Claude session id"]
+  D --> RU["runs.json<br/>recent background runs"]
+  D --> TK["tasks.json<br/>reminders and recurring tasks"]
+  D --> SH["shopping.json<br/>shopping list"]
+  D --> AS["assistant-settings.json<br/>model, budget, workDir, browser"]
+  D --> SL["server.log<br/>when Cairn.app started the server"]
+    </pre></div>
+    <p class="diagram-caption">Everything Cairn persists is in one directory, so deleting it resets Cairn completely. Retention is covered in the <a href="security.html#retention">Security model</a>.</p>
+
+    <h2 id="pagemap">Page map</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Page</th><th>Read it when you want to…</th></tr></thead>
+      <tbody>
+        <tr><td><a href="assistant.html">Desktop assistant</a></td><td>see everything the assistant can do, how it compares with ChatGPT Agent, ChatGPT Tasks and Grok, and how approvals, reminders, shopping and memory work</td></tr>
+        <tr><td><a href="desktop.html">Floating bubble app</a></td><td>build and run <code>Cairn.app</code>, pick an avatar, read the state indicators and troubleshoot macOS permissions</td></tr>
+        <tr><td><a href="../web/avatars/gallery.html">Avatar gallery</a></td><td>watch the three avatars in every state side by side</td></tr>
+        <tr><td><a href="features.html">Feature catalogue</a></td><td>compare the assistant with ChatGPT Agent and Grok, and the search engine with the OpenAI, xAI, Anthropic and Google bots, feature by feature, with the status and source file of each</td></tr>
+        <tr><td><a href="naming.html">Why "Cairn"</a></td><td>understand the name, the selection criteria, the alternatives considered and the guidance for EDR false positives</td></tr>
+        <tr><td><a href="architecture.html">Architecture</a></td><td>see context, container and component diagrams for the engine and the assistant layer, the module map, data stores, runtime wiring and the process model</td></tr>
+        <tr><td><a href="workflows.html">Workflow diagrams</a></td><td>follow the crawl lifecycle, fetch pipeline, robots decisions, backoff, RAG, the research loop and signing, step by step</td></tr>
+        <tr><td><a href="robots.html">robots.txt compliance</a></td><td>check exactly how RFC 9309, meta robots and X-Robots-Tag are interpreted</td></tr>
+        <tr><td><a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a></td><td>verify Cairn's requests cryptographically or understand the key directory</td></tr>
+        <tr><td><a href="agent.html">Claude agent &amp; MCP</a></td><td>review the Claude CLI invocation, prompts, MCP tools and agent safety</td></tr>
+        <tr><td><a href="security.html">Security model</a></td><td>review the threat model, local server hardening, limits and residual risks</td></tr>
+        <tr><td><a href="cli.html">CLI reference</a></td><td>look up every <code>bin/cairn.js</code> command and flag, including <code>chat</code>, <code>remind</code>, <code>tasks</code> and <code>desktop</code></td></tr>
+        <tr><td><a href="api.html">HTTP API reference</a></td><td>integrate with the local JSON and SSE API, including <code>/api/assistant/*</code></td></tr>
+        <tr><td><a href="site-owners.html">For site owners</a></td><td>block, allow or verify Cairn on your own site</td></tr>
+        <tr><td><a href="testing.html">Testing &amp; results</a></td><td>see what the test suite covers and how to run the live Claude tests</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

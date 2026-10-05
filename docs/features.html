@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feature catalogue — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Feature catalogue</h1>
+    <p class="lead">Two researched comparisons. First, the desktop assistant against ChatGPT Agent and Grok. Second, the search engine (the assistant's search skill) against what the OpenAI, xAI, Anthropic and Google bot families publicly document, alongside the relevant industry standards. For each feature it gives Cairn's status and the file that implements it.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#assistant-features">Assistant features</a></li>
+      <li><a href="#areas">Search engine feature areas</a></li>
+      <li><a href="#families">The bot families researched</a></li>
+      <li><a href="#user-fetch">User-triggered fetches and robots.txt</a></li>
+      <li><a href="#catalogue">Comparison table</a></li>
+      <li><a href="#coverage">Coverage summary</a></li>
+      <li><a href="#not-implemented">Deliberately not implemented</a></li>
+      <li><a href="#sources">Sources and research notes</a></li>
+    </ol></div>
+
+    <div class="callout warn"><strong>Research date: 2026-09-30.</strong> Vendor crawler documentation changes often. Table cells describe what each vendor <em>publicly documents</em>. "n/d" means not documented in the sources below, not that the capability is absent. The xAI cells rely largely on third-party reports because xAI has no official crawler documentation page.</div>
+
+    <h2 id="assistant-features">Assistant features</h2>
+    <p>How the Cairn desktop assistant compares with ChatGPT Agent (with ChatGPT Tasks and shopping) and Grok (Tasks, DeepSearch and its agent). The research notes, sources and a longer table with more rows are on the <a href="assistant.html#compare">Desktop assistant</a> page.</p>
+    <p>Legend: <span class="badge good">Implemented</span> built and tested · <span class="badge info">Via Claude</span> provided by Claude's own tools, prompted and gated by Cairn · <span class="badge warn">Partial</span> · <span class="badge">Not yet</span> · <span class="badge bad">By design: no</span> deliberately left out.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Feature</th><th>ChatGPT Agent</th><th>Grok</th><th>Cairn</th><th>Status</th><th>Where in Cairn</th></tr></thead>
+      <tbody>
+        <tr><th colspan="6">Presence and background work</th></tr>
+        <tr><td>Desktop presence</td><td>Desktop app with a ⌥Space chat bar</td><td>Desktop and mobile apps</td><td>Floating, always-on-top, draggable avatar bubble on every Space, with a choice of three live avatars. ⌥Space opens the panel.</td><td><span class="badge good">Implemented</span></td><td><code>desktop/CairnBubble.swift</code>, <code>web/avatars/*.html</code></td></tr>
+        <tr><td>Status at a glance</td><td>Progress in the chat</td><td>Progress in the chat</td><td>The avatar changes state: idle, working (with the number of runs), attention (approvals waiting) and offline</td><td><span class="badge good">Implemented</span></td><td><code>desktop/CairnBubble.swift</code>, <code>/api/assistant/health</code></td></tr>
+        <tr><td>Always-on background runs</td><td>Runs in the cloud while you do other things</td><td>Runs in the cloud</td><td>Every request is a background run that survives closing the panel. 3 at once by default, extra runs queue. Server watchdog and opt-in login item.</td><td><span class="badge good">Implemented</span> <span class="badge warn">local only</span></td><td><code>src/assistant/agent.js</code>, <code>desktop/CairnBubble.swift</code></td></tr>
+        <tr><td>Activity view</td><td>Agent and Tasks pages</td><td>Tasks page</td><td>Activity, Tasks, Shopping and History tabs in the chat panel</td><td><span class="badge good">Implemented</span></td><td><code>web/bubble.html</code>, <code>web/bubble.js</code></td></tr>
+        <tr><td>Notifications</td><td>Push or email</td><td>Push or email</td><td>macOS Notification Center when a run finishes, a reminder fires or an approval is needed</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/routes.js</code>, <code>src/assistant/macos.js</code></td></tr>
+        <tr><th colspan="6">Reminders and recurring tasks</th></tr>
+        <tr><td>One-time reminders</td><td>ChatGPT Tasks</td><td>Grok Tasks</td><td>Scheduler, a macOS notification and an attention state on the avatar</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/scheduler.js</code>, <code>mcp-tools.js</code> <code>schedule_task</code></td></tr>
+        <tr><td>Recurring prompts / agent tasks</td><td>Recurring tasks</td><td>Daily, weekly, monthly tasks</td><td>Every minute, hour, day, week or weekday, with interval, time and days. Agent tasks run unattended.</td><td><span class="badge good">Implemented</span></td><td><code>scheduler.js</code>, <code>agent.js</code> <code>runOnce</code></td></tr>
+        <tr><td>Natural-language times</td><td>Interpreted by the model</td><td>Interpreted by the model</td><td>Claude computes exact local times. Quick-add text such as "every weekday at 9" is parsed locally.</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/when.js</code></td></tr>
+        <tr><td>Reminders.app and Calendar.app</td><td>Calendar connector</td><td>—</td><td>Only when you ask, through <code>osascript</code></td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/macos.js</code></td></tr>
+        <tr><th colspan="6">Search, research and shopping</th></tr>
+        <tr><td>Web search and live pages</td><td>Search and a text browser</td><td>Web and X search</td><td>Claude <code>WebSearch</code> and <code>WebFetch</code>, plus the Cairn index and its compliant fetcher</td><td><span class="badge info">Via Claude</span></td><td><code>agent.js</code>, <code>src/agent/mcp-server.js</code></td></tr>
+        <tr><td>Deep, multi-step research</td><td>Deep research</td><td>DeepSearch</td><td>Claude agent loop with cited sources</td><td><span class="badge info">Via Claude</span></td><td><code>agent.js</code>, <code>src/agent/research.js</code></td></tr>
+        <tr><td>Shopping research</td><td>Shopping research</td><td>General search</td><td>Comparison table (product, store, price, rating, link) and a shopping list</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/shopping.js</code>, system prompt in <code>agent.js</code></td></tr>
+        <tr><td>Checkout and payment</td><td>Instant Checkout</td><td>—</td><td>Never pays or places orders. It may fill a cart, then hands you the checkout link.</td><td><span class="badge bad">By design: no</span></td><td>system prompt in <code>agent.js</code></td></tr>
+        <tr><th colspan="6">Computer tasks and safety</th></tr>
+        <tr><td>Visual browser</td><td>Browser in a cloud VM</td><td>Browser in a cloud VM</td><td>Playwright MCP in a visible window on your Mac. Navigation and snapshots are automatic; clicks, typing and forms need approval.</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code>, <code>settings.allowBrowser</code></td></tr>
+        <tr><td>Terminal and files</td><td>Terminal in a cloud VM</td><td>Terminal in a cloud VM</td><td>Your real Mac. <code>Read</code>, <code>Glob</code>, <code>Grep</code> run freely; <code>Bash</code>, <code>Write</code> and <code>Edit</code> need approval.</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code>, <code>approvals.js</code></td></tr>
+        <tr><td>Mac apps, URLs, clipboard</td><td>—</td><td>—</td><td><code>open_app</code>, <code>open_url</code>, <code>clipboard_write</code>; <code>clipboard_read</code> needs approval</td><td><span class="badge good">Implemented</span></td><td><code>mcp-tools.js</code>, <code>macos.js</code></td></tr>
+        <tr><td>Confirm before consequential actions</td><td>Yes</td><td>Yes, for its agent</td><td>Permission-prompt tool: Approve, Deny or Always allow, with a timeout, from the chat panel</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/approvals.js</code>, <code>mcp-tools.js</code> <code>approval_prompt</code></td></tr>
+        <tr><td>Takeover and watch mode</td><td>Yes</td><td>—</td><td>You can use the visible Playwright window directly. No automatic watch mode.</td><td><span class="badge warn">Partial</span></td><td>Playwright MCP</td></tr>
+        <tr><td>Conversation memory</td><td>Account memory</td><td>Remembers corrections</td><td>Per conversation, through <code>claude --resume</code></td><td><span class="badge warn">Partial</span></td><td><code>src/assistant/conversations.js</code></td></tr>
+        <tr><td>Connectors (mail, drive, code hosts)</td><td>Many</td><td>Some</td><td>Not wired in. More MCP servers can be added.</td><td><span class="badge">Not yet</span></td><td>—</td></tr>
+        <tr><td>Cost control</td><td>Monthly quotas</td><td>Tier quotas</td><td><code>--max-budget-usd</code> per run (default 2) and the cost of each run shown</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code>, <code>assistant-settings.json</code></td></tr>
+        <tr><td>Where it runs</td><td>OpenAI cloud</td><td>xAI cloud</td><td>Your Mac, on <code>127.0.0.1</code>. The model is reached through your Claude login.</td><td><span class="badge info">Local-first</span></td><td><code>bin/cairn.js serve</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>The rest of this page covers the search engine. For how the assistant decides what needs approval, see <a href="assistant.html#safety">Safety model and approval policy</a>.</p>
+
+    <h2 id="areas">Search engine feature areas</h2>
+    <div class="diagram-title">Figure 1 — Map of feature areas</div>
+    <div class="diagram"><pre class="mermaid">
+mindmap
+  root((Cairn))
+    Identity
+      Three role tokens
+      Honest User-Agent
+      Bot info page
+      IP range JSON
+      From contact header
+    Control
+      Per-role opt-out
+      User fetch policy
+      24h robots TTL
+      Manual cache clear
+    Compliance
+      RFC 9309 robots
+      Meta robots
+      X-Robots-Tag
+      Sitemaps
+      Canonical and dedupe
+    Politeness
+      Crawl-delay
+      Per-host queue
+      Backoff and Retry-After
+      Size and time caps
+    Verification
+      Web Bot Auth signing
+      Key directory
+      Signature verifier
+    Answering
+      BM25 index
+      Cited answers
+      Extractive fallback
+      SSE streaming
+    Agentic
+      Claude CLI
+      Five MCP tools
+      Budget and timeout caps
+    Operator tooling
+      Audit trail
+      Robots tester
+      Fetch inspector
+      CLI and doctor
+    </pre></div>
+    <p class="diagram-caption">The eight areas used to group the comparison table below.</p>
+
+    <h2 id="families">The bot families researched</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Vendor</th><th>Search / retrieval crawl</th><th>Training crawl</th><th>User-triggered fetch</th><th>Other</th><th>IP ranges</th></tr></thead>
+      <tbody>
+        <tr><td><strong>OpenAI</strong></td><td><code>OAI-SearchBot</code></td><td><code>GPTBot</code></td><td><code>ChatGPT-User</code> (no robots token; robots rules may not apply)</td><td><code>OAI-AdsBot</code>, which validates ad landing pages and is not used for training</td><td><code>searchbot.json</code>, <code>gptbot.json</code>, <code>adsbot.json</code>, <code>chatgpt-user.json</code></td></tr>
+        <tr><td><strong>xAI</strong></td><td>DeepSearch / Grok search retrieval (reported <code>xAI-Bot</code>, <code>Grok-DeepSearch</code> names)</td><td>Training crawl (reported <code>GrokBot</code> / <code>xAI-Bot</code>)</td><td>User-triggered fetch (reported <code>Grok-User</code>)</td><td>No official crawler page. Traffic reportedly uses spoofed Chrome/Safari UAs from residential IPs</td><td>None published</td></tr>
+        <tr><td><strong>Anthropic</strong></td><td><code>Claude-SearchBot</code></td><td><code>ClaudeBot</code></td><td><code>Claude-User</code> (honours robots.txt)</td><td>Supports <code>Crawl-delay</code>. States it will not bypass CAPTCHAs</td><td>Published IP list</td></tr>
+        <tr><td><strong>Google</strong></td><td><code>Googlebot</code></td><td><code>Google-Extended</code> (a robots token only; crawling is done by Googlebot)</td><td><code>Google-Agent</code> and other user-triggered fetchers (generally ignore robots.txt)</td><td>Google-Agent experiments with Web Bot Auth using the <code>agent.bot.goog</code> identity</td><td><code>googlebot.json</code>, <code>user-triggered-fetchers*.json</code>, <code>user-triggered-agents.json</code></td></tr>
+        <tr><td><strong>Cairn</strong></td><td><code>CairnSearch</code></td><td><code>CairnCorpus</code></td><td><code>Cairn-User</code> (robots respected by default)</td><td>Family fallback token <code>Cairn</code></td><td><code>/bot/cairnsearch.json</code>, <code>/bot/cairncorpus.json</code>, <code>/bot/cairn-user.json</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="user-fetch">User-triggered fetches and robots.txt</h2>
+    <p>The vendors differ most on user-triggered fetches. When a person asks the assistant to open a URL, is that request governed by robots.txt?</p>
+    <div class="diagram-title">Figure 2 — How each family treats a user-triggered fetch</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  Q{"A person asks the assistant<br/>to open a URL"}
+  Q --> OA["OpenAI ChatGPT-User<br/>robots rules may not apply"]
+  Q --> GO["Google-Agent<br/>generally ignores robots.txt"]
+  Q --> XA["xAI user fetch<br/>undocumented, reportedly not honoured"]
+  Q --> AN["Anthropic Claude-User<br/>honours robots.txt"]
+  Q --> CA["Cairn-User<br/>honours robots.txt by default<br/>config.robots.respectForUserFetch"]
+  CA --> REF["Blocked: the agent gets a refusal<br/>and an audit entry is written"]
+    </pre></div>
+    <p class="diagram-caption">Cairn follows Anthropic's position and makes it the default. An operator can turn it off (for example, to fetch their own site), and the choice is visible in the audit trail and on the <code>/bot</code> page.</p>
+
+    <h2 id="catalogue">Comparison table</h2>
+    <p>Status legend:
+      <span class="badge good">Implemented</span> built and covered by tests ·
+      <span class="badge info">Opt-in</span> implemented, off by default ·
+      <span class="badge info">By design</span> intentionally differs from the vendors ·
+      <span class="badge warn">Partial</span> ·
+      <span class="badge">Not implemented</span> ·
+      <span class="badge">N/A</span> not applicable to a local tool.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Feature</th><th>OpenAI</th><th>xAI</th><th>Anthropic</th><th>Google</th><th>Cairn status</th><th>Where in Cairn</th></tr></thead>
+      <tbody>
+        <tr><th colspan="7">Identity &amp; transparency</th></tr>
+        <tr><td>Separate bot per purpose (search / training / user)</td><td>Yes: OAI-SearchBot, GPTBot, ChatGPT-User</td><td>Reported three-way split, not officially documented</td><td>Yes: Claude-SearchBot, ClaudeBot, Claude-User</td><td>Yes: Googlebot, Google-Extended, Google-Agent</td><td><span class="badge good">Implemented</span></td><td><code>src/identity.js</code> (<code>ROLES</code>)</td></tr>
+        <tr><td>Honest UA: product token, version and info URL</td><td>Yes (<code>compatible; OAI-SearchBot/1.x; +https://openai.com/searchbot</code>)</td><td>Reportedly spoofs browser UAs</td><td>Yes (token in UA)</td><td>Yes</td><td><span class="badge good">Implemented</span></td><td><code>src/identity.js</code> <code>userAgent()</code></td></tr>
+        <tr><td>Family fallback token</td><td>No, tokens are independent</td><td>n/d</td><td>No</td><td>Yes: specialised crawlers fall back to the <code>Googlebot</code> group</td><td><span class="badge good">Implemented</span> <code>Cairn</code></td><td><code>src/identity.js</code> <code>robotsTokens()</code></td></tr>
+        <tr><td>Public bot information page</td><td>Yes (developer docs)</td><td>No official page found</td><td>Yes (help-centre article)</td><td>Yes (crawler overview docs)</td><td><span class="badge good">Implemented</span> <code>GET /bot</code></td><td><code>src/server/botpage.js</code></td></tr>
+        <tr><td>Published IP ranges, one JSON file per bot</td><td>Yes (4 files)</td><td>None published</td><td>Yes</td><td>Yes (per crawler class)</td><td><span class="badge good">Implemented</span></td><td><code>src/server/app.js</code> <code>/bot/*.json</code>, <code>config.identity</code></td></tr>
+        <tr><td>Operator contact sent with each request (<code>From:</code>)</td><td>n/d</td><td>n/d</td><td>Contact email in docs</td><td>n/d</td><td><span class="badge good">Implemented</span></td><td><code>src/net/fetcher.js</code>, <code>config.contact</code></td></tr>
+        <tr><td>Ad landing-page validation bot</td><td>Yes: OAI-AdsBot</td><td>n/d</td><td>n/d</td><td>Yes: AdsBot-Google</td><td><span class="badge">Not implemented</span></td><td>Out of scope, since Cairn has no ads</td></tr>
+
+        <tr><th colspan="7">Control &amp; opt-out</th></tr>
+        <tr><td>Training opt-out independent of search</td><td>Yes: block GPTBot, keep OAI-SearchBot</td><td>n/d</td><td>Yes: ClaudeBot vs Claude-SearchBot</td><td>Yes: <code>Google-Extended</code></td><td><span class="badge good">Implemented</span> <code>CairnCorpus</code></td><td><code>src/identity.js</code>, <code>src/crawl/crawler.js</code>, <code>src/crawl/corpus.js</code></td></tr>
+        <tr><td>robots.txt applies to user-triggered fetches</td><td>No (ChatGPT-User)</td><td>Reportedly no</td><td>Yes (Claude-User)</td><td>Generally no (Google-Agent)</td><td><span class="badge info">By design</span> yes by default, configurable</td><td><code>src/net/fetcher.js</code>, <code>config.robots.respectForUserFetch</code></td></tr>
+        <tr><td>robots.txt change propagation</td><td>About 24 h</td><td>n/d</td><td>n/d</td><td>Cached up to about 24 h</td><td><span class="badge good">Implemented</span> 24 h TTL, plus manual clear</td><td><code>src/robots/cache.js</code>, <code>POST /api/robots/cache/clear</code></td></tr>
+        <tr><td>Crawl consolidation (one fetch reused for several purposes)</td><td>Yes, when a site allows both bots</td><td>n/d</td><td>n/d</td><td>Googlebot fetches also serve Google-Extended uses</td><td><span class="badge info">By design</span> not consolidated</td><td><code>src/crawl/crawler.js</code>: each role fetches under its own token</td></tr>
+        <tr><td>robots scope per origin (scheme, host, port)</td><td>Standard</td><td>n/d</td><td>Yes (per subdomain)</td><td>Yes</td><td><span class="badge good">Implemented</span></td><td><code>src/robots/cache.js</code> (keyed by origin)</td></tr>
+        <tr><td>Runtime-editable politeness and robots policy</td><td>n/a</td><td>n/a</td><td>n/a</td><td>Crawl-rate limiter deprecated</td><td><span class="badge good">Implemented</span></td><td><code>POST /api/config</code>, <code>src/config.js</code> <code>EDITABLE_KEYS</code></td></tr>
+
+        <tr><th colspan="7">Compliance: robots.txt (RFC 9309) and page-level signals</th></tr>
+        <tr><td>RFC 9309 matching: longest match, allow wins ties, <code>*</code> and <code>$</code></td><td>Yes (standard robots.txt)</td><td>Claimed by third parties</td><td>Yes</td><td>Yes (Google co-authored RFC 9309)</td><td><span class="badge good">Implemented</span></td><td><code>src/robots/parser.js</code></td></tr>
+        <tr><td>Parse limit on robots.txt size</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (500 KiB)</td><td><span class="badge good">Implemented</span> 500 KiB</td><td><code>src/robots/parser.js</code></td></tr>
+        <tr><td>Fetch-error semantics: 4xx allows all, 5xx or network error disallows all</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (per RFC 9309)</td><td><span class="badge good">Implemented</span>, with a stale copy preferred on errors</td><td><code>src/robots/cache.js</code></td></tr>
+        <tr><td>robots rechecked on every redirect hop</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge good">Implemented</span></td><td><code>src/net/fetcher.js</code></td></tr>
+        <tr><td>Meta robots, including a bot-scoped meta name</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (<code>&lt;meta name="googlebot"&gt;</code>)</td><td><span class="badge good">Implemented</span> (<code>&lt;meta name="CairnSearch"&gt;</code>)</td><td><code>src/extract/html.js</code></td></tr>
+        <tr><td><code>X-Robots-Tag</code> header, including the bot-scoped form</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (<code>googlebot: noindex</code>)</td><td><span class="badge good">Implemented</span> (<code>CairnSearch: noindex</code>)</td><td><code>src/net/fetcher.js</code></td></tr>
+        <tr><td><code>noarchive</code> / <code>nosnippet</code></td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (nosnippet, max-snippet)</td><td><span class="badge good">Implemented</span>: no snippet, no passage text for RAG</td><td><code>src/index/store.js</code></td></tr>
+        <tr><td>Page <code>nofollow</code> and link <code>rel=nofollow</code></td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes (treated as a hint)</td><td><span class="badge good">Implemented</span> (strict)</td><td><code>src/crawl/crawler.js</code></td></tr>
+        <tr><td>Canonical URL and duplicate-content detection</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes</td><td><span class="badge good">Implemented</span> (canonical + SHA-256 hash)</td><td><code>src/crawl/crawler.js</code>, <code>src/index/store.js</code></td></tr>
+        <tr><td>Sitemaps: <code>Sitemap:</code> lines, <code>/sitemap.xml</code>, sitemap indexes</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Yes</td><td><span class="badge good">Implemented</span> (3 levels, 1000 URLs)</td><td><code>src/extract/sitemap.js</code>, <code>src/crawl/crawler.js</code></td></tr>
+        <tr><td><code>llms.txt</code></td><td>Not mentioned in bot docs</td><td>n/d</td><td>Publishes its own; no stated crawler use</td><td>Publicly not supported</td><td><span class="badge">Not implemented</span> (watching)</td><td>Not implemented: robots.txt remains the control surface</td></tr>
+
+        <tr><th colspan="7">Politeness</th></tr>
+        <tr><td><code>Crawl-delay</code></td><td>n/d</td><td>n/d</td><td>Supported</td><td>Ignored by Googlebot</td><td><span class="badge good">Implemented</span></td><td><code>src/net/ratelimit.js</code> (<code>crawlDelaySec</code>)</td></tr>
+        <tr><td>Per-host serial queue with a minimum delay</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Adaptive crawl rate</td><td><span class="badge good">Implemented</span> (1 in flight, at least 1 s)</td><td><code>src/net/ratelimit.js</code> <code>HostScheduler</code></td></tr>
+        <tr><td>Backoff on 429/503 that honours <code>Retry-After</code></td><td>n/d</td><td>n/d</td><td>n/d</td><td>Slows down on 429/5xx</td><td><span class="badge good">Implemented</span> (exponential, capped at 60 s)</td><td><code>src/net/ratelimit.js</code>, <code>src/net/fetcher.js</code></td></tr>
+        <tr><td>Response size and time caps</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Documented file-size limit</td><td><span class="badge good">Implemented</span> (5 MiB, 15 s, 5 redirects)</td><td><code>src/net/fetcher.js</code>, <code>config.fetch</code></td></tr>
+        <tr><td>Global concurrency cap</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge good">Implemented</span> (8)</td><td><code>src/net/ratelimit.js</code></td></tr>
+        <tr><td>Skip non-text content types</td><td>n/d</td><td>n/d</td><td>n/d</td><td>Indexes many types</td><td><span class="badge good">Implemented</span> (<code>skipped-type</code>)</td><td><code>src/crawl/crawler.js</code></td></tr>
+
+        <tr><th colspan="7">Verification</th></tr>
+        <tr><td>Web Bot Auth request signatures (RFC 9421, Ed25519)</td><td>Yes, for ChatGPT agent requests</td><td>n/d</td><td>n/d</td><td>Experimenting (Google-Agent)</td><td><span class="badge good">Implemented</span></td><td><code>src/net/signing.js</code> <code>Signer.signRequest()</code></td></tr>
+        <tr><td>Key directory at <code>/.well-known/http-message-signatures-directory</code></td><td>Yes (ChatGPT agent)</td><td>n/d</td><td>n/d</td><td>Yes (<code>agent.bot.goog</code>)</td><td><span class="badge good">Implemented</span></td><td><code>src/server/app.js</code>, <code>signer.jwks()</code></td></tr>
+        <tr><td>Key id as an RFC 7638 JWK thumbprint</td><td>Per draft</td><td>n/d</td><td>n/d</td><td>Per draft</td><td><span class="badge good">Implemented</span></td><td><code>src/net/signing.js</code> <code>jwkThumbprint()</code></td></tr>
+        <tr><td>Signature verifier for site owners</td><td>Via CDN partners</td><td>n/d</td><td>n/d</td><td>Via CDN partners</td><td><span class="badge good">Implemented</span> (<code>/api/verify-signature</code>, fixture <code>/signed-only</code>)</td><td><code>src/net/signing.js</code> <code>verifyRequest()</code></td></tr>
+        <tr><td>Reverse-DNS verification</td><td>No (IP lists)</td><td>No</td><td>n/d</td><td>Yes (<code>googlebot.com</code>)</td><td><span class="badge">N/A</span></td><td>Local egress. Cairn uses IP JSON files and signatures instead</td></tr>
+
+        <tr><th colspan="7">Retrieval &amp; answering</th></tr>
+        <tr><td>Own search index behind answers</td><td>ChatGPT search</td><td>Grok search</td><td>Claude web search</td><td>Google Search</td><td><span class="badge good">Implemented</span> (BM25, title boost)</td><td><code>src/index/store.js</code>, <code>src/index/tokenize.js</code></td></tr>
+        <tr><td>Answers with inline source citations</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td><span class="badge good">Implemented</span> (<code>[n]</code>)</td><td><code>src/agent/answer.js</code></td></tr>
+        <tr><td>Grounded-only answers that say when the answer is unknown</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge good">Implemented</span> (prompt contract)</td><td><code>src/agent/answer.js</code></td></tr>
+        <tr><td>Works without an LLM</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td><span class="badge good">Implemented</span> (extractive fallback)</td><td><code>src/agent/answer.js</code></td></tr>
+        <tr><td>Streaming answers</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td><span class="badge good">Implemented</span> (SSE)</td><td><code>src/server/sse.js</code>, <code>GET /api/ask/stream</code></td></tr>
+
+        <tr><th colspan="7">Agentic</th></tr>
+        <tr><td>Multi-step deep research</td><td>ChatGPT deep research</td><td>Grok DeepSearch</td><td>Claude Research</td><td>Gemini Deep Research</td><td><span class="badge good">Implemented</span></td><td><code>src/agent/research.js</code></td></tr>
+        <tr><td>Agent restricted to compliant fetch tools</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge good">Implemented</span> (5 MCP tools, no built-ins)</td><td><code>src/agent/mcp-server.js</code>, <code>src/agent/claude.js</code></td></tr>
+        <tr><td>robots refusal passed back to the model</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge good">Implemented</span></td><td><code>src/agent/mcp-server.js</code> (<code>fetch_page</code>)</td></tr>
+        <tr><td>Spend and wall-clock caps per run</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td><span class="badge good">Implemented</span> ($1.50, 240 s by default)</td><td><code>src/agent/claude.js</code>, <code>config.agent</code></td></tr>
+        <tr><td>No CAPTCHA solving or login bypass</td><td>n/d</td><td>n/d</td><td>Stated: will not bypass CAPTCHAs</td><td>n/d</td><td><span class="badge good">Implemented</span> (never)</td><td>Policy. No code path exists</td></tr>
+
+        <tr><th colspan="7">Operator tooling</th></tr>
+        <tr><td>Per-request audit trail</td><td>Internal</td><td>Internal</td><td>Internal</td><td>Internal</td><td><span class="badge good">Implemented</span> (NDJSON + live SSE)</td><td><code>src/util/audit.js</code>, <code>GET /api/audit/stream</code></td></tr>
+        <tr><td>robots tester (paste a robots.txt, see all roles)</td><td>n/a</td><td>n/a</td><td>n/a</td><td>Search Console robots report</td><td><span class="badge good">Implemented</span></td><td><code>POST /api/robots/check</code>, <code>web/app.js</code></td></tr>
+        <tr><td>Fetch inspector (exact headers, signature, redirects)</td><td>n/a</td><td>n/a</td><td>n/a</td><td>URL Inspection tool</td><td><span class="badge good">Implemented</span></td><td><code>POST /api/fetch</code>, <code>POST /api/sign-preview</code>, <code>web/app.js</code></td></tr>
+        <tr><td>CLI with <code>doctor</code> and <code>demo</code></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td><span class="badge good">Implemented</span></td><td><code>bin/cairn.js</code></td></tr>
+        <tr><td>Block private-network targets (SSRF guard)</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td><span class="badge info">Opt-in</span></td><td><code>config.fetch.blockPrivateNetworks</code>, <code>src/net/fetcher.js</code></td></tr>
+        <tr><td>Pay-per-crawl / HTTP 402 negotiation</td><td>n/d</td><td>n/d</td><td>n/d</td><td>n/d</td><td><span class="badge">Not implemented</span></td><td>Possible future work. A 402 is treated like any other 4xx page response</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="coverage">Coverage summary</h2>
+    <div class="diagram-title">Figure 3 — Status of the 51 catalogued features</div>
+    <div class="diagram"><pre class="mermaid">
+pie showData
+  title Cairn feature status
+  "Implemented" : 44
+  "By design (differs)" : 2
+  "Opt-in" : 1
+  "Not implemented" : 3
+  "Not applicable" : 1
+    </pre></div>
+    <p class="diagram-caption">"By design" rows are the two places where Cairn deliberately differs from the vendors. It does not consolidate crawls across purposes, and it applies robots.txt to user-triggered fetches by default.</p>
+
+    <h2 id="not-implemented">Deliberately not implemented</h2>
+    <div class="callout bad"><strong>These are refusals, not backlog items.</strong> Each one would make Cairn harder for site owners to identify or control. Adding any of them would violate the project's hard rules in <code>SPEC.md</code>.</div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Practice</th><th>Why it is tempting</th><th>Why Cairn refuses</th><th>What Cairn does instead</th></tr></thead>
+      <tbody>
+        <tr><td><strong>User-Agent spoofing</strong> (sending Chrome or Safari strings; this is reported of xAI traffic)</td><td>Gets past UA-based blocks and bot-management rules</td><td>It is deceptive, it defeats the site owner's robots.txt and firewall choices, and it makes the operator's traffic indistinguishable from an attack</td><td>Every request names its role token and links to <code>/bot</code>. Requests are signed so the identity can be verified</td></tr>
+        <tr><td><strong>Residential or rotating IP pools</strong></td><td>Avoids per-IP rate limits and IP-reputation blocks</td><td>It evades rate limits the site set on purpose and makes published IP ranges meaningless</td><td>Egress uses the operator's own address. The ranges are published in <code>/bot/*.json</code> (configurable in <code>config.identity</code>)</td></tr>
+        <tr><td><strong>Ignoring robots.txt for user-triggered fetches by default</strong> (the ChatGPT-User and Google-Agent position)</td><td>Answers never hit "blocked"</td><td>A research agent can issue many "user" fetches. Treating them all as exempt turns the agent into an unthrottled crawler</td><td><code>respectForUserFetch: true</code> by default. Turning it off is an explicit operator choice, and it is audited</td></tr>
+        <tr><td><strong>CAPTCHA solving</strong> (human farms or ML solvers)</td><td>Unlocks protected pages</td><td>A CAPTCHA is an explicit "humans only" signal. Anthropic's stated policy is the same</td><td>A challenge page is just a response. Cairn records the status and moves on</td></tr>
+        <tr><td><strong>Headless-browser or TLS-fingerprint mimicry</strong></td><td>Defeats JavaScript and TLS bot detection</td><td>This is evasion by definition</td><td>Plain Node <code>fetch</code> with honest headers. Pages that only render client-side are out of scope</td></tr>
+        <tr><td><strong>Login-wall or paywall bypass</strong></td><td>More content</td><td>It is outside the site owner's intended audience and may breach terms or law</td><td>Cairn never sends cookies or credentials and fetches public URLs only</td></tr>
+        <tr><td><strong>Retrying through 429 without backoff</strong></td><td>Faster crawls</td><td>It harms the site and gets the operator blocked</td><td>Exponential backoff that honours <code>Retry-After</code>, and the host is penalised in <code>HostScheduler</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="sources">Sources and research notes</h2>
+    <ul>
+      <li>OpenAI, <em>Overview of OpenAI crawlers</em>: <a href="https://developers.openai.com/api/docs/bots">developers.openai.com/api/docs/bots</a>. Covers OAI-SearchBot, GPTBot, OAI-AdsBot and ChatGPT-User, the four IP JSON files, the roughly 24 h robots.txt propagation for search, and that "results from a single crawl" may be used for multiple bots when a site allows both.</li>
+      <li>Anthropic, <em>Does Anthropic crawl data from the web, and how can site owners block the crawler?</em>: <a href="https://support.claude.com/en/articles/8896518">support.claude.com/en/articles/8896518</a>. Covers ClaudeBot, Claude-User, Claude-SearchBot, Crawl-delay support, no CAPTCHA bypass and the published IP list.</li>
+      <li>Google, <em>User-triggered fetchers</em>: <a href="https://developers.google.com/crawling/docs/crawlers-fetchers/google-user-triggered-fetchers">developers.google.com/crawling/…/google-user-triggered-fetchers</a>. Covers Google-Agent (added March 2026), the note that user-triggered fetchers "generally ignore robots.txt rules", <code>user-triggered-agents.json</code>, and the Web Bot Auth experiment with <code>https://agent.bot.goog</code>. Google-Extended is documented under Google's common crawlers.</li>
+      <li>xAI: no official crawler documentation page was found. Third-party directories and reports (for example <a href="https://www.menra.ai/guides/grok-crawler-guide">menra.ai</a> and <a href="https://nohacks.co/blog/ai-user-agents-landscape-2026">nohacks.co</a>) describe a training crawl, DeepSearch retrieval and user-triggered fetches, and report spoofed browser UAs and residential IPs. Treat these as unverified.</li>
+      <li>IETF, <em>HTTP Message Signatures for automated traffic Architecture</em>: <a href="https://datatracker.ietf.org/doc/html/draft-meunier-web-bot-auth-architecture">draft-meunier-web-bot-auth-architecture</a>. Also <a href="https://www.rfc-editor.org/rfc/rfc9421">RFC 9421</a> (HTTP Message Signatures), <a href="https://www.rfc-editor.org/rfc/rfc7638">RFC 7638</a> (JWK Thumbprint) and Cloudflare's <a href="https://github.com/cloudflare/web-bot-auth">web-bot-auth</a> reference implementation and verified-bots programme.</li>
+      <li><a href="https://www.rfc-editor.org/rfc/rfc9309">RFC 9309</a>, Robots Exclusion Protocol. Covers matching, the 500 KiB limit and error handling. <code>Crawl-delay</code> and <code>Sitemap</code> are widely used extensions and are not part of the RFC's core rules.</li>
+      <li><code>llms.txt</code> (proposed September 2024). Adoption studies in 2026 found that most published files receive almost no bot traffic, and no major AI vendor has committed to using third-party llms.txt files for crawling.</li>
+    </ul>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

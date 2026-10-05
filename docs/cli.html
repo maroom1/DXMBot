@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CLI reference — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>CLI reference</h1>
+    <p class="lead"><code>bin/cairn.js</code> is a single zero-dependency Node script that drives every part of Cairn from a terminal: the server, the desktop assistant (<a href="#assistant-commands"><code>chat</code>, <code>remind</code>, <code>tasks</code>, <code>approvals</code>, <code>shopping</code>, <code>assistant</code>, <code>desktop</code></a>), and the search engine's crawler, search, answers, robots diagnostics and demo.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#tour">5-minute tour</a></li>
+      <li><a href="#synopsis">Synopsis &amp; global options</a></li>
+      <li><a href="#command-map">Command map</a></li>
+      <li><a href="#serve">serve</a></li>
+      <li><a href="#crawl">crawl</a></li>
+      <li><a href="#search">search</a></li>
+      <li><a href="#ask">ask</a></li>
+      <li><a href="#fetch">fetch</a></li>
+      <li><a href="#robots">robots</a></li>
+      <li><a href="#keys">keys</a></li>
+      <li><a href="#stats">stats</a></li>
+      <li><a href="#audit">audit</a></li>
+      <li><a href="#index">index</a></li>
+      <li><a href="#doctor">doctor</a></li>
+      <li><a href="#fixture">fixture</a></li>
+      <li><a href="#demo">demo</a></li>
+      <li><a href="#help">help</a></li>
+      <li><a href="#assistant-commands">Assistant commands</a>: <a href="#chat">chat</a>, <a href="#remind">remind</a>, <a href="#tasks">tasks</a>, <a href="#approvals">approvals</a>, <a href="#shopping">shopping</a>, <a href="#assistant-cmd">assistant</a>, <a href="#desktop">desktop</a></li>
+      <li><a href="#exit-codes">Exit codes</a></li>
+      <li><a href="#env">Environment variables</a></li>
+    </ol></div>
+
+    <h2 id="tour">5-minute tour</h2>
+    <p>Everything below runs against the bundled <strong>Northwind Trails</strong> fixture site on your own machine — no external network, no npm install.</p>
+    <div class="diagram-title">Figure 1 — The tour, step by step</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  subgraph S1["Set up and index"]
+    direction LR
+    D["1\. doctor<br/>check setup"] --> FX["2\. fixture<br/>start demo site :8788"]
+    FX --> RB["3\. robots<br/>see per-role decisions"]
+    RB --> CR["4\. crawl<br/>index the site"]
+  end
+  subgraph S2["Query and inspect"]
+    direction LR
+    SE["5\. search<br/>BM25 results"] --> AK["6\. ask<br/>cited answer"]
+    AK --> AU["7\. audit<br/>every request logged"]
+    AU --> SV["8\. serve<br/>open the dashboard"]
+  end
+  S1 --> S2
+    </pre></div>
+    <p class="diagram-caption">Each step builds on the previous one; <code>demo</code> runs steps 2 to 6 automatically in one process, against a throwaway data directory.</p>
+
+    <pre class="code"><code># 0. Requirements: Node 20+. Claude CLI optional (answers fall back to extractive).
+$ node --version
+v20.20.0
+
+# 1. Is everything in place?
+$ node bin/cairn.js doctor
+
+# 2. Terminal A: start the fictional outdoor-gear site on port 8788
+$ node bin/cairn.js fixture --port 8788
+
+# 3. Terminal B: how does robots.txt treat each Cairn role?
+$ node bin/cairn.js robots http://127.0.0.1:8788/private/public-note.html
+
+# 4. Crawl it as the search indexer (watch private pages get refused)
+$ node bin/cairn.js crawl http://127.0.0.1:8788/ --max-pages 60 --max-depth 5
+
+# 5. Search the local index
+$ node bin/cairn.js search "ridgeback weight"
+
+# 6. Ask with citations (quick RAG; add --deep for the research agent)
+$ node bin/cairn.js ask "How much does the Ridgeback 45 weigh and what is the return window?"
+
+# 7. See exactly what Cairn requested, as whom, and what robots.txt said
+$ node bin/cairn.js audit --limit 15
+
+# 8. Open the web UI (Ask, Crawl, Index, Fetch inspector, Robots tester, Audit, Identity, Settings)
+$ node bin/cairn.js serve --open
+
+# Or do steps 2 to 6 in one go (add --no-claude to force the offline extractive answer):
+$ node bin/cairn.js demo</code></pre>
+
+    <h2 id="synopsis">Synopsis &amp; global options</h2>
+    <pre class="code"><code>node bin/cairn.js &lt;command&gt; [arguments] [options]
+npx cairn &lt;command&gt; ...          # via the "bin" entry in package.json
+npm start                        # = cairn serve
+npm run fixture                  # = cairn fixture
+npm run demo                     # = cairn demo</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Applies to</th><th>Description</th></tr>
+      <tr><td><code>--data-dir &lt;dir&gt;</code></td><td>all</td><td>Use this data directory (index, audit log, keys, corpus, config) instead of <code>$CAIRN_HOME</code> / <code>./data</code>. Relative paths are resolved against the current directory.</td></tr>
+      <tr><td><code>--json</code>, <code>-j</code></td><td>crawl, search, ask, fetch, robots, keys, stats, audit, index list, doctor, chat, remind, tasks, approvals, shopping</td><td>Print one machine-readable JSON document on stdout. Progress lines (crawl pages, ask steps) go to stderr, so <code>| jq</code> just works.</td></tr>
+      <tr><td><code>--port &lt;n&gt;</code>, <code>-p</code></td><td>serve, fixture, and the assistant commands</td><td>For <code>serve</code> and <code>fixture</code>, the port to listen on. For assistant commands, the port of the running server to talk to (default: the configured port).</td></tr>
+      <tr><td><code>--no-color</code></td><td>all</td><td>Disable ANSI colours. Colours are also off when stdout is not a TTY or <code>NO_COLOR</code> is set; <code>FORCE_COLOR=1</code> forces them on.</td></tr>
+      <tr><td><code>--help</code>, <code>-h</code></td><td>all</td><td>Print the help text (same as <code>help</code>).</td></tr>
+      <tr><td><code>--version</code>, <code>-v</code></td><td>all</td><td>Print <code>cairn 1.0.0</code> (from <code>package.json</code>).</td></tr>
+    </table></div>
+    <p>Parsing rules: options may appear before or after positional arguments; <code>--name value</code> and <code>--name=value</code> are equivalent; boolean flags accept <code>--flag=false</code> / <code>=0</code> / <code>=no</code>; a value may not start with <code>--</code>; everything after a bare <code>--</code> is positional. Short aliases: <code>-n</code> = <code>--limit</code>, <code>-p</code> = <code>--port</code>, <code>-j</code> = <code>--json</code>. Repeating a value option keeps the last value, except <code>--include</code>/<code>--exclude</code>, which accumulate. Unknown options are a usage error (exit 2).</p>
+    <p>Only <code>serve</code>, <code>fixture</code>, <code>demo</code> and <code>ask --deep</code> open a listening socket. The <a href="#assistant-commands">assistant commands</a> are HTTP clients of a running server, because the assistant's runs, approvals and scheduler live in the server process. Every other command runs in-process directly against the data directory, so it works without a running server. Avoid running a crawl from the CLI while <code>serve</code> is writing the same data directory.</p>
+
+    <h2 id="command-map">Command map</h2>
+    <div class="diagram-title">Figure 2 — Commands and the components they drive</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  CLI(("cairn"))
+  subgraph SRV["Servers"]
+    c_serve["serve"]
+    c_fixture["fixture"]
+    c_demo["demo"]
+  end
+  subgraph RET["Retrieval"]
+    c_crawl["crawl"]
+    c_fetch["fetch"]
+    c_robots["robots"]
+  end
+  subgraph ANS["Answers"]
+    c_search["search"]
+    c_ask["ask"]
+  end
+  subgraph AST["Assistant, via the running server"]
+    c_chat["chat"]
+    c_remind["remind"]
+    c_tasks["tasks"]
+    c_appr["approvals"]
+    c_shop["shopping"]
+    c_asst["assistant"]
+    c_desk["desktop"]
+  end
+  subgraph OPS["Inspect &amp; maintain"]
+    c_stats["stats"]
+    c_audit["audit"]
+    c_index["index list|clear|remove"]
+    c_keys["keys"]
+    c_doctor["doctor"]
+  end
+  CLI --> SRV
+  CLI --> RET
+  CLI --> ANS
+  CLI --> OPS
+  CLI --> AST
+  c_serve --> HTTP["HTTP API + web UI"]
+  c_fixture --> NW["Northwind Trails site"]
+  c_demo --> NW
+  c_demo --> FE
+  c_crawl --> FE["Fetcher: robots, rate limit, signing, audit"]
+  c_fetch --> FE
+  c_robots --> RC["RobotsCache or --file"]
+  c_search --> IDX[("SearchIndex")]
+  c_ask --> IDX
+  c_ask --> CL["Claude CLI"]
+  c_ask -.->|"--deep"| HTTP
+  c_index --> IDX
+  c_stats --> IDX
+  c_stats --> AL
+  c_audit --> AL[("audit.ndjson")]
+  c_keys --> KY[("Ed25519 keys")]
+  c_doctor --> KY
+  c_chat --> AAPI["/api/assistant/*"]
+  c_remind --> AAPI
+  c_tasks --> AAPI
+  c_appr --> AAPI
+  c_shop --> AAPI
+  c_asst -->|"opens /assistant"| AAPI
+  c_desk --> APP["desktop/run.sh<br/>Cairn.app"]
+  APP -.->|"starts if needed"| HTTP
+  AAPI --- HTTP
+    </pre></div>
+    <p class="diagram-caption">The CLI reuses the server's own helpers (<code>crawlOptions</code>, <code>fetchAndExtract</code>, <code>robotsDecisions</code>, <code>ask</code>), so a command and its <a href="api.html">HTTP API</a> twin validate input and produce results identically — and neither can bypass robots.txt or politeness.</p>
+
+    <!-- ============================== serve ============================== -->
+    <h2 id="serve">serve</h2>
+    <p>Starts the HTTP API and web UI. Runs until Ctrl-C / SIGTERM, then closes open streams, saves the index and closes the audit log.</p>
+    <pre class="code"><code>cairn serve [--port &lt;n&gt;] [--host &lt;addr&gt;] [--open]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--port &lt;n&gt;</code>, <code>-p</code></td><td><code>$CAIRN_PORT</code> or <code>8787</code></td><td>Listen port, 0–65535. <code>0</code> picks a free port.</td></tr>
+      <tr><td><code>--host &lt;addr&gt;</code></td><td><code>$CAIRN_HOST</code> or <code>127.0.0.1</code></td><td>Bind address. Keep the loopback default: the API has no authentication.</td></tr>
+      <tr><td><code>--open</code></td><td>off</td><td>Open the dashboard in the default browser (<code>open</code> / <code>xdg-open</code> / <code>explorer</code>).</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js serve
+Cairn is listening on http://127.0.0.1:8787
+  UI          http://127.0.0.1:8787/
+  Site owners http://127.0.0.1:8787/bot
+  Docs        http://127.0.0.1:8787/docs/
+  Data        /Users/you/DxBot/data
+  Key id      poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U
+Press Ctrl-C to stop.</code></pre>
+    <p>If the port is taken, <code>serve</code> exits 1 with <code>error: Port 8787 is already in use (is Cairn already running? try --port 0)</code>.</p>
+
+    <!-- ============================== crawl ============================== -->
+    <h2 id="crawl">crawl</h2>
+    <p>Runs a crawl job in-process and prints each page outcome live, then a summary. robots.txt is fetched first for every origin; <code>Crawl-delay</code>, per-host spacing (<code>politeness.minDelayMs</code>) and backoff are enforced by the fetcher. Ctrl-C cancels the job gracefully; a second Ctrl-C quits immediately (exit 130).</p>
+    <pre class="code"><code>cairn crawl &lt;url...&gt; [--role search|corpus] [--max-pages &lt;n&gt;] [--max-depth &lt;n&gt;] [--concurrency &lt;n&gt;]
+                     [--no-sitemaps] [--any-site] [--include &lt;regex&gt;]... [--exclude &lt;regex&gt;]... [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>&lt;url...&gt;</code></td><td>—</td><td>One or more absolute http(s) seed URLs (required; at most 50).</td></tr>
+      <tr><td><code>--role search|corpus</code></td><td><code>search</code></td><td><code>search</code> (UA token <code>CairnSearch</code>) adds pages to the index. <code>corpus</code> (<code>CairnCorpus</code>) appends to <code>&lt;dataDir&gt;/corpus/&lt;jobId&gt;.jsonl</code> and leaves the index alone.</td></tr>
+      <tr><td><code>--max-pages &lt;n&gt;</code></td><td><code>crawl.maxPages</code> (50)</td><td>Stop after <em>n</em> fetched pages (integer ≥ 1).</td></tr>
+      <tr><td><code>--max-depth &lt;n&gt;</code></td><td><code>crawl.maxDepth</code> (2)</td><td>Maximum link depth from the seeds (integer ≥ 0). Sitemap URLs count as depth 1.</td></tr>
+      <tr><td><code>--concurrency &lt;n&gt;</code></td><td><code>crawl.concurrency</code> (4)</td><td>Parallel fetches within the job, 1–32 (per-host limits still apply).</td></tr>
+      <tr><td><code>--no-sitemaps</code></td><td>sitemaps on</td><td>Do not read <code>Sitemap:</code> lines or <code>/sitemap.xml</code>.</td></tr>
+      <tr><td><code>--any-site</code></td><td>same-site only</td><td>Follow links to other sites (their robots.txt is still fetched and honoured).</td></tr>
+      <tr><td><code>--include &lt;regex&gt;</code></td><td>—</td><td>Only URLs matching one of these patterns are enqueued. Repeatable.</td></tr>
+      <tr><td><code>--exclude &lt;regex&gt;</code></td><td>—</td><td>URLs matching any of these patterns are skipped. Repeatable.</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td>Progress to stderr; the final job status object (as in <code>GET /api/crawl/:id</code>) to stdout.</td></tr>
+    </table></div>
+    <p>Each progress line shows elapsed time, outcome, HTTP status (<code>---</code> when nothing was fetched), depth, URL and title.</p>
+    <pre class="code"><code>$ node bin/cairn.js crawl http://127.0.0.1:8788/ --max-pages 60 --max-depth 5
+Crawling http://127.0.0.1:8788/ as CairnSearch (max 60 pages, depth 5, 1000 ms/host)
+  1.0s  indexed        200  d0  http://127.0.0.1:8788/  — Northwind Trails — Backpacks and outerwear designed in Bois…
+  3.0s  indexed        200  d1  http://127.0.0.1:8788/products/  — All products — Northwind Trails
+  4.0s  indexed        200  d1  http://127.0.0.1:8788/blog/  — Trail Journal — Northwind Trails
+  5.0s  indexed        200  d1  http://127.0.0.1:8788/faq.html  — Help &amp; FAQ: returns, warranty and shipping — Northwind Trai…
+  6.0s  indexed        200  d1  http://127.0.0.1:8788/about.html  — About Northwind Trails
+  8.0s  indexed        200  d1  http://127.0.0.1:8788/products/ridgeback-45.html  — Ridgeback 45 Backpack — Northwind Trails
+  9.0s  indexed        200  d1  http://127.0.0.1:8788/products/summit-shell.html  — Summit Shell Jacket — Northwind Trails
+ 16.0s  indexed        200  d1  http://127.0.0.1:8788/nofollow.html  — Community trail reviews — Northwind Trails
+ 17.0s  indexed        200  d1  http://127.0.0.1:8788/rel-nofollow.html  — Retail partners — Northwind Trails
+ 18.0s  indexed        200  d1  http://127.0.0.1:8788/rate-limited  — Today's trail conditions — Northwind Trails
+ 19.0s  indexed        200  d1  http://127.0.0.1:8788/flaky  — Store locations and hours — Northwind Trails
+ 20.0s  noindex        200  d1  http://127.0.0.1:8788/noindex.html  — Holiday sale preview (draft) — Northwind Trails
+ 21.0s  noindex        200  d1  http://127.0.0.1:8788/xrobots.html  — Spring catalog preview — Northwind Trails
+ 23.0s  blocked-robots ---  d1  http://127.0.0.1:8788/redirect-to-private
+ 23.0s  blocked-robots ---  d1  http://127.0.0.1:8788/file.pdf
+ 24.0s  duplicate      200  d1  http://127.0.0.1:8788/canonical-dup.html  — About Northwind Trails
+ 24.0s  blocked-robots ---  d1  http://127.0.0.1:8788/search?q=x
+ 25.0s  indexed        200  d1  http://127.0.0.1:8788/dup-content.html  — Five classic day hikes in the Boise foothills — Trail Journ…
+ 26.0s  duplicate      200  d1  http://127.0.0.1:8788/redirect
+ 27.0s  skipped-type   200  d1  http://127.0.0.1:8788/data.json
+ 28.0s  duplicate      200  d2  http://127.0.0.1:8788/blog/post-1.html  — Five classic day hikes in the Boise foothills — Trail Journ…
+ 28.0s  blocked-robots ---  d2  http://127.0.0.1:8788/private/secret.html
+ 29.0s  indexed        200  d2  http://127.0.0.1:8788/blog/post-2.html  — Layering 101: staying dry without overheating — Trail Journ…
+ 30.0s  indexed        200  d2  http://127.0.0.1:8788/blog/post-3.html  — Packing for the Sawtooths: a five-day checklist — Trail Jou…
+ 31.0s  indexed        200  d2  http://127.0.0.1:8788/private/public-note.html  — Press note: Northwind Trails media kit
+ 32.1s  indexed        200  d1  http://127.0.0.1:8788/orphan.html  — Repair &amp; Renew program — Northwind Trails
+ 33.1s  indexed        200  d2  http://127.0.0.1:8788/via-noindex.html  — 2026 gift guide — Northwind Trails
+ 34.1s  indexed        200  d3  http://127.0.0.1:8788/blog/deep/level-3.html  — Sawtooth trip report, part 1: Redfish Lake to Alpine Lake —…
+ 35.1s  indexed        200  d4  http://127.0.0.1:8788/blog/deep/level-4.html  — Sawtooth trip report, part 2: Sawtooth Lake to Iron Creek —…
+
+Job job-1-muoojlc4  state done  (29 discovered)
+25 fetched · 19 indexed · 0 collected · 2 noindex · 3 duplicates · 4 blocked by robots · 1 skipped · 0 errors</code></pre>
+    <p>Corpus example — the fixture's robots.txt disallows <code>CairnCorpus</code> entirely, so only <code>/robots.txt</code> is requested and nothing is collected:</p>
+    <pre class="code"><code>$ node bin/cairn.js crawl http://127.0.0.1:8788/ --role corpus
+Crawling http://127.0.0.1:8788/ as CairnCorpus (max 50 pages, depth 2, 1000 ms/host)
+  0.0s  blocked-robots ---  d0  http://127.0.0.1:8788/
+
+Job job-1-muookmbk  state done  (1 discovered)
+0 fetched · 0 indexed · 0 collected · 0 noindex · 0 duplicates · 1 blocked by robots · 0 skipped · 0 errors
+Corpus written to /Users/you/DxBot/data/corpus/job-1-muookmbk.jsonl</code></pre>
+    <p class="diagram-caption">Real transcripts against the fixture on <code>127.0.0.1:8788</code> with default politeness (1 s between requests to a host). The gap after <code>/products/summit-shell.html</code> is <code>/rate-limited</code> (429 + <code>Retry-After: 1</code>) and <code>/flaky</code> (503) being retried with backoff until they succeed. In the corpus crawl the only request that reaches the site is <code>/robots.txt</code>; the seed and <code>/sitemap.xml</code> are refused locally and show up in the audit log as <code>blocked:robots</code>.</p>
+
+    <!-- ============================== search ============================== -->
+    <h2 id="search">search</h2>
+    <p>BM25 search over the local index (no network).</p>
+    <pre class="code"><code>cairn search &lt;query...&gt; [--limit &lt;n&gt;] [--site &lt;site&gt;] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>&lt;query...&gt;</code></td><td>—</td><td>Search terms; multiple words are joined with spaces.</td></tr>
+      <tr><td><code>--limit &lt;n&gt;</code>, <code>-n</code></td><td><code>10</code></td><td>Maximum results, 1–100.</td></tr>
+      <tr><td><code>--site &lt;site&gt;</code></td><td>—</td><td>Restrict to one site (hostname without <code>www.</code>).</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td>The raw result, same shape as <code>GET /api/search</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js search "ridgeback weight" --limit 2
+4 results for "ridgeback weight" in 0.65 ms
+
+1. Ridgeback 45 Backpack — Northwind Trails  score 6.85
+   http://127.0.0.1:8788/products/ridgeback-45.html
+   … Ember Warranty Lifetime warranty Weight and carry At a weight of 1.2 kg the Ridgeback 45 carries loads up to 18 kg comfortably. The weight is kept low by a …
+
+2. All products — Northwind Trails  score 1.90
+   http://127.0.0.1:8788/products/
+   … All products Product Category Price Ridgeback 45 Trekking backpack $189 Summit Shell Waterproof jacket $249 © 2026 Northwind Trails, Inc. · 1420 West Grove Street, Boise, Idaho 83702 · support@northwindtrails.example</code></pre>
+    <p>On an empty index it prints <code>The index is empty — run `cairn crawl &lt;url&gt;` first.</code> (exit 0).</p>
+
+    <!-- ============================== ask ============================== -->
+    <h2 id="ask">ask</h2>
+    <p>Answers a question with numbered citations. <strong>Quick</strong> mode (default) retrieves passages from the index and asks Claude (no tools) to answer only from them; without a working Claude CLI it prints an extractive answer instead. <strong>Deep</strong> mode (<code>--deep</code>) runs the Claude research agent: the CLI starts an in-process API server on an ephemeral loopback port so the agent's MCP bridge can search the index, fetch pages as <code>Cairn-User</code> (robots-respecting), crawl small scopes and check robots.txt. If Claude is unavailable, deep mode falls back to a quick answer.</p>
+    <pre class="code"><code>cairn ask &lt;question...&gt; [--deep] [--model &lt;alias&gt;] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>&lt;question...&gt;</code></td><td>—</td><td>The question (quote it); at most 4000 characters.</td></tr>
+      <tr><td><code>--deep</code></td><td>quick</td><td>Use the research agent.</td></tr>
+      <tr><td><code>--model &lt;alias&gt;</code></td><td><code>agent.model</code> (<code>$CAIRN_MODEL</code> or <code>sonnet</code>)</td><td>Claude model alias or id, e.g. <code>haiku</code>.</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td>The full result object, same as <code>POST /api/ask</code>.</td></tr>
+    </table></div>
+    <p>Progress (status lines, retrieval, and in deep mode each tool call <code>→</code> and result <code>←</code>) is written to stderr; the answer to stdout.</p>
+    <pre class="code"><code>$ node bin/cairn.js ask "How much does the Ridgeback 45 weigh and what is the return window?" --model haiku
+· Searching the local index…
+· retrieved 8 passage(s)
+· Asking Claude (haiku) with 6 sources…
+· Starting Claude CLI (haiku)
+· Claude session started (haiku)
+
+The Ridgeback 45 weighs 1.2 kg [1]. Any purchase can be returned within 60 days [2].
+
+Sources
+  [1] Ridgeback 45 Backpack — Northwind Trails  http://127.0.0.1:8788/products/ridgeback-45.html
+  [2] About Northwind Trails  http://127.0.0.1:8788/about.html
+mode quick · answered by Claude · $0.0031 · 4.2 s</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js ask "Does Northwind Trails publish a private roadmap?" --deep
+· research bridge listening on http://127.0.0.1:53817
+· Starting deep research with sonnet…
+→ search_index {"query":"Northwind Trails roadmap"}
+← Found 2 results ...
+→ fetch_page {"url":"http://127.0.0.1:8788/private/secret.html"}
+← blocked by robots.txt (disallow: /private/) — not fetched ...
+...</code></pre>
+
+    <!-- ============================== fetch ============================== -->
+    <h2 id="fetch">fetch</h2>
+    <p>Fetches one URL through the compliant pipeline and shows the request identity, robots decision, redirects, status and the extracted page.</p>
+    <pre class="code"><code>cairn fetch &lt;url&gt; [--role user|search|corpus] [--index] [--full] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--role</code></td><td><code>user</code></td><td>Identity to fetch as (<code>user</code> = <code>Cairn-User</code>).</td></tr>
+      <tr><td><code>--index</code></td><td>off</td><td>Add the page to the search index when allowed, extracted and not <code>noindex</code> (never for <code>corpus</code>).</td></tr>
+      <tr><td><code>--full</code></td><td>off</td><td>Print the whole extracted markdown (otherwise the first 2000 characters).</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td><code>{result, extracted, indexed, robots}</code>, same as <code>POST /api/fetch</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js fetch http://127.0.0.1:8788/redirect-to-private
+
+Request
+  URL         http://127.0.0.1:8788/redirect-to-private
+  Agent       Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +http://127.0.0.1:8787/bot
+  Signed      yes (Web Bot Auth)
+  robots.txt  allowed (no matching rule) [group *]
+
+Response
+  Blocked     robots — Disallowed by http://127.0.0.1:8788/robots.txt (disallow: /private/)
+  Redirect    302 http://127.0.0.1:8788/redirect-to-private → http://127.0.0.1:8788/private/secret.html
+  Final URL   http://127.0.0.1:8788/private/secret.html
+  Size        0 bytes in 991 ms
+$ echo $?
+1</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js fetch http://127.0.0.1:8788/about.html --index
+
+Request
+  URL         http://127.0.0.1:8788/about.html
+  Agent       Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; Cairn-User/1.0; +http://127.0.0.1:8787/bot
+  Signed      yes (Web Bot Auth)
+  robots.txt  allowed (no matching rule) [group *]
+
+Response
+  Status      200  text/html; charset=utf-8
+  Size        2415 bytes in 990 ms
+
+About Northwind Trails
+Northwind Trails is an independent outdoor-gear company founded in 2011 and headquartered in Boise, Idaho.
+172 words · 7 links · 3 headings
+
+[Northwind Trails](http://127.0.0.1:8788/)
+...
+# About Northwind Trails
+
+Northwind Trails is an independent outdoor-gear company headquartered in Boise, Idaho. The company was founded in 2011 ...
+
+## What we believe
+
+- Gear should last decades, which is why every Northwind Trails pack carries a lifetime warranty.
+- Customers deserve time to decide: any purchase can be returned within 60 days.
+...
+
+Indexed: added</code></pre>
+    <p>The requested URL was allowed, but the redirect hop into <code>/private/</code> was re-checked and refused, so the private page was never requested (<code>Final URL</code> is where the redirect pointed, not something that was fetched). The ~1 s timings are the default per-host spacing (<code>politeness.minDelayMs</code>) after the robots.txt request. <code>fetch</code> exits 1 whenever the result is not a 2xx page (robots refusal, HTTP error, network error).</p>
+
+    <!-- ============================== robots ============================== -->
+    <h2 id="robots">robots</h2>
+    <p>Shows how robots.txt treats a URL for every Cairn role, with the deciding rule and group. With <code>--file</code> a local robots.txt is evaluated offline (nothing is fetched) — ideal for testing a file before you publish it.</p>
+    <pre class="code"><code>cairn robots &lt;url|path&gt; [--file &lt;robots.txt&gt;] [--role &lt;role&gt;] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>&lt;url|path&gt;</code></td><td>—</td><td>An absolute URL; with <code>--file</code> a bare path such as <code>/private/x.html</code> is also accepted.</td></tr>
+      <tr><td><code>--file &lt;path&gt;</code></td><td>—</td><td>Evaluate this robots.txt file instead of fetching the site's.</td></tr>
+      <tr><td><code>--role &lt;role&gt;</code></td><td>—</td><td>List this role first (all three are always shown).</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td>Same shape as <code>POST /api/robots/check</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js robots http://127.0.0.1:8788/private/public-note.html
+robots.txt http://127.0.0.1:8788/robots.txt (source: network, HTTP 200)
+Target: http://127.0.0.1:8788/private/public-note.html
+
+  CairnSearch  allowed     allow: /private/public-note.html  [group: CairnSearch]
+  CairnCorpus  disallowed  disallow: /  [group: CairnCorpus]
+  Cairn-User   disallowed  disallow: /private/  [group: *]
+
+Sitemaps: http://127.0.0.1:8788/sitemap.xml</code></pre>
+
+    <!-- ============================== keys ============================== -->
+    <h2 id="keys">keys</h2>
+    <p>Prints the Web Bot Auth key id (RFC 7638 thumbprint), key location and the JWKS served at <code>/.well-known/http-message-signatures-directory</code>. The Ed25519 key pair is generated on first use in <code>&lt;dataDir&gt;/keys/</code> (private key mode 0600).</p>
+    <pre class="code"><code>cairn keys [--json]          # --json → {keyId, keyDir, jwks}</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js keys
+Key id     KN51To3lPwlSSyUV7iPoCvCZ9WJZcZT2RXaPv_zqukc
+Key files  /Users/you/DxBot/data/keys
+Directory  &lt;server&gt;/.well-known/http-message-signatures-directory
+Signing    enabled
+
+{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "HuE80pcX-4N4VHtQNkSNOaC_VoiLoA4jI3KZoOzBwns",
+      "kid": "KN51To3lPwlSSyUV7iPoCvCZ9WJZcZT2RXaPv_zqukc",
+      "use": "sig",
+      "alg": "EdDSA"
+    }
+  ]
+}</code></pre>
+
+    <!-- ============================== stats ============================== -->
+    <h2 id="stats">stats</h2>
+    <p>Index statistics plus totals computed from the whole on-disk audit log (<code>audit.ndjson</code>, not just the in-memory window).</p>
+    <pre class="code"><code>cairn stats [--json]         # --json → {index, auditLog: {total, byKind, byRole, blocked}, dataDir}</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js stats
+
+Index
+  19 documents · 26 passages · 514 terms · updated 2026-09-30T22:32:08.384Z
+      19  127.0.0.1
+
+Audit log
+  49 entries · 7 blocked
+  by kind: robots 5, crawl 4, fetch 40
+  by role: search 37, user 5, corpus 3
+
+Data directory: /Users/you/DxBot/data</code></pre>
+    <p>Note that <code>cairn stats --json</code> differs from <code>GET /api/stats</code>: the CLI has no live scheduler, job list or robots cache to report.</p>
+
+    <!-- ============================== audit ============================== -->
+    <h2 id="audit">audit</h2>
+    <p>Most recent audit entries, newest first, read from <code>&lt;dataDir&gt;/audit.ndjson</code>: every request Cairn made, as which agent, with what result. Timestamps are UTC. <code>blocked:robots</code> lines are refusals — no request was sent.</p>
+    <pre class="code"><code>cairn audit [--limit &lt;n&gt;] [--role &lt;role&gt;] [--kind &lt;kind&gt;] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--limit &lt;n&gt;</code>, <code>-n</code></td><td><code>30</code></td><td>Number of entries.</td></tr>
+      <tr><td><code>--role &lt;role&gt;</code></td><td>—</td><td><code>search</code>, <code>corpus</code> or <code>user</code>.</td></tr>
+      <tr><td><code>--kind &lt;kind&gt;</code></td><td>—</td><td><code>fetch</code>, <code>robots</code>, <code>crawl</code>, <code>agent</code>, <code>system</code>.</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td><code>{entries}</code>.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js audit --limit 6
+2026-09-30 22:32:21  crawl  job-1-muookmbk finish http://127.0.0.1:8788/  {"role":"corpus","state":"done","counts":{"discovered":1,"queued":0,"fetched":0…
+2026-09-30 22:32:21  fetch  CairnCorpus blocked:robots  http://127.0.0.1:8788/sitemap.xml  0 ms
+2026-09-30 22:32:21  fetch  CairnCorpus blocked:robots  http://127.0.0.1:8788/  6 ms
+2026-09-30 22:32:21  robots CairnCorpus 200  http://127.0.0.1:8788/robots.txt  16 ms
+2026-09-30 22:32:21  crawl  job-1-muookmbk start http://127.0.0.1:8788/  {"role":"corpus","seeds":["http://127.0.0.1:8788/"],"options":{"maxPages":50,"m…
+2026-09-30 22:32:21  fetch  Cairn-User  200  http://127.0.0.1:8788/about.html  5 ms</code></pre>
+
+    <!-- ============================== index ============================== -->
+    <h2 id="index">index</h2>
+    <p>Inspect and maintain the local search index.</p>
+    <pre class="code"><code>cairn index list [--site &lt;site&gt;] [--limit &lt;n&gt;] [--json]
+cairn index remove &lt;url&gt;
+cairn index clear</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Subcommand</th><th>Description</th></tr>
+      <tr><td><code>list</code></td><td>Document count, then URL, title, word count, role and fetch time per document (default 50; <code>--json</code> → <code>{total, docs}</code>).</td></tr>
+      <tr><td><code>remove &lt;url&gt;</code></td><td>Delete one document (URL matched as given or normalised) and save. Exits 1 if it is not indexed.</td></tr>
+      <tr><td><code>clear</code></td><td>Delete every document and save the empty index.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js index list --limit 2
+19 documents
+  http://127.0.0.1:8788/about.html  About Northwind Trails 172 words · user · 2026-09-30T22:32:21.194Z
+  http://127.0.0.1:8788/blog/deep/level-4.html  Sawtooth trip report, part 2: Sawtooth Lake to Iron Creek —… 67 words · search · 2026-09-30T22:32:08.383Z
+$ node bin/cairn.js index remove http://127.0.0.1:8788/about.html
+Removed http://127.0.0.1:8788/about.html
+$ node bin/cairn.js index clear
+Removed 18 documents from the index.</code></pre>
+
+    <!-- ============================== doctor ============================== -->
+    <h2 id="doctor">doctor</h2>
+    <p>Checks the environment, one line per check. Only a failed check (old Node, unwritable data directory) makes it exit 1; warnings (no Claude CLI, key not generated yet, port busy, UI, assistant UI or docs missing, desktop app not built yet) do not. Without Claude, quick answers fall back to extractive and deep research falls back to quick.</p>
+    <pre class="code"><code>cairn doctor [--json]        # --json → {ok, checks: [{name, status: "ok"|"warn"|"fail", detail}]}</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js doctor
+✔ ok    Node.js         v20.20.0
+✔ ok    Data directory  /Users/you/DxBot/data is writable
+! warn  Signing key     not created yet — generated automatically on first run (or run `cairn keys`)
+✔ ok    Claude CLI      claude 2.1.286 (Claude Code)
+✔ ok    Port            127.0.0.1:8787 is free
+✔ ok    Web UI          /Users/you/DxBot/web
+✔ ok    Assistant UI    /Users/you/DxBot/web/bubble.html
+✔ ok    Docs            /Users/you/DxBot/docs
+✔ ok    Desktop app     /Applications/Cairn.app (start it from the Dock, Spotlight or Apps / Launchpad; update with `node bin/cairn.js desktop --install`)
+
+Cairn is ready.</code></pre>
+
+    <!-- ============================== fixture ============================== -->
+    <h2 id="fixture">fixture</h2>
+    <p>Starts the <strong>Northwind Trails</strong> demo site (<code>fixtures/site-server.js</code>): a fictional outdoor-gear company whose routes exercise every compliance behaviour — per-agent robots groups, noindex, nofollow, redirects into disallowed paths, 429/503, sitemaps, Web Bot Auth. See the <a href="testing.html#fixture">fixture site map</a>.</p>
+    <pre class="code"><code>cairn fixture [--port &lt;n&gt;] [--host &lt;addr&gt;]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--port &lt;n&gt;</code>, <code>-p</code></td><td><code>8788</code></td><td>Listen port (<code>0</code> = ephemeral).</td></tr>
+      <tr><td><code>--host &lt;addr&gt;</code></td><td><code>127.0.0.1</code></td><td>Bind address.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js fixture
+Northwind Trails demo site on http://127.0.0.1:8788
+Try: node bin/cairn.js crawl http://127.0.0.1:8788/
+Press Ctrl-C to stop.</code></pre>
+
+    <!-- ============================== demo ============================== -->
+    <h2 id="demo">demo</h2>
+    <p>End-to-end showcase in one process: (1) start the fixture on an ephemeral port, (2) crawl it as <code>CairnSearch</code> (200 ms per-host spacing, up to 60 pages, depth 5), (3) show robots.txt decisions for a private page, (4) search, (5) ask a quick question. It uses a temporary data directory that is deleted afterwards, so it never touches your real index.</p>
+    <pre class="code"><code>cairn demo [--no-claude] [--keep] [--data-dir &lt;dir&gt;]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--no-claude</code></td><td>off</td><td>Skip Claude and show the offline extractive answer (fully deterministic, free).</td></tr>
+      <tr><td><code>--keep</code></td><td>off</td><td>Keep the temporary data directory and print its path.</td></tr>
+      <tr><td><code>--data-dir &lt;dir&gt;</code></td><td>temp dir</td><td>Use (and keep) this data directory instead.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js demo --no-claude
+1. Demo site  Northwind Trails is running at http://127.0.0.1:49179
+   Data directory: /var/folders/…/T/cairn-demo-w4eo7Z
+
+2. Crawl  as CairnSearch, 200 ms between requests per host
+  0.2s  indexed        200  d0  http://127.0.0.1:49179/  — Northwind Trails — Backpacks and outerwear designed in Bois…
+  0.6s  indexed        200  d1  http://127.0.0.1:49179/products/  — All products — Northwind Trails
+  0.8s  indexed        200  d1  http://127.0.0.1:49179/blog/  — Trail Journal — Northwind Trails
+  ...
+ 11.7s  indexed        200  d3  http://127.0.0.1:49179/blog/deep/level-3.html  — Sawtooth trip report, part 1: Redfish Lake to Alpine Lake —…
+ 11.9s  indexed        200  d4  http://127.0.0.1:49179/blog/deep/level-4.html  — Sawtooth trip report, part 2: Sawtooth Lake to Iron Creek —…
+
+Job job-1-muooiq8e  state done  (29 discovered)
+25 fetched · 19 indexed · 0 collected · 2 noindex · 3 duplicates · 4 blocked by robots · 1 skipped · 0 errors
+
+3. robots.txt  decisions for http://127.0.0.1:49179/private/secret.html
+   CairnSearch  disallowed  disallow: /private/
+   CairnCorpus  disallowed  disallow: /
+   Cairn-User   disallowed  disallow: /private/
+
+4. Search  "ridgeback backpack weight"
+4 results for "ridgeback backpack weight" in 1.92 ms
+
+1. Ridgeback 45 Backpack — Northwind Trails  score 9.67
+   http://127.0.0.1:49179/products/ridgeback-45.html
+   … Help &amp; FAQ About Ridgeback 45 Backpack $189 USD The Ridgeback 45 is our 45-litre trekking backpack for trips of two to five nights. The Ridgeback 45 weighs 1.2 kg …
+   …
+
+5. Ask  How much does the Ridgeback 45 weigh and what is the return window?
+· Searching the local index…
+· retrieved 8 passage(s)
+· Claude unavailable (Claude CLI not found ("/var/folders/…/T/cairn-demo-w4eo7Z/no-claude-for-demo"). Install Claude Code or set agent.claudeBin / CAIRN_CLAUDE_BIN.); using an extractive answer.
+
+Claude was not used for this answer (the Claude CLI was unavailable or failed), so here are the most relevant excerpts from the index:
+
+- **Ridgeback 45 Backpack — Northwind Trails**: Northwind Trails Gear Trail Journal Help &amp; FAQ About Ridgeback 45 Backpack $189 USD The Ridgeback 45 is our 45-l … [1]
+- **Northwind Trails — Backpacks and outerwear designed in Boise, Idaho**: … [2]
+- **Help &amp; FAQ: returns, warranty and shipping — Northwind Trails**: … [3]
+
+Sources
+  [1] Ridgeback 45 Backpack — Northwind Trails  http://127.0.0.1:49179/products/ridgeback-45.html
+  [2] Northwind Trails — Backpacks and outerwear designed in Boise, Idaho  http://127.0.0.1:49179/
+  [3] Help &amp; FAQ: returns, warranty and shipping — Northwind Trails  http://127.0.0.1:49179/faq.html
+mode quick · extractive fallback (Claude not used) · 0.0 s
+
+Done. The fixture site received 32 requests for 29 paths; none were disallowed by robots.txt.
+Run `node bin/cairn.js serve` and open /bot to see what site owners see.</code></pre>
+
+    <!-- ============================== help ============================== -->
+    <h2 id="help">help</h2>
+    <p>Prints the command list and global options. <code>cairn</code> with no command, <code>--help</code> and <code>-h</code> do the same. Actual output:</p>
+    <pre class="code"><code>$ node bin/cairn.js help
+Cairn — transparent, robots.txt-respecting retrieval &amp; answer engine
+
+Usage: cairn &lt;command&gt; [options]
+
+Commands
+  serve [--port N] [--host H] [--open]      Start the web UI + API (default http://127.0.0.1:8787)
+  crawl &lt;url...&gt; [options]                  Crawl and index (or collect) a site, printing live progress
+      --role search|corpus  --max-pages N  --max-depth N  --concurrency N
+      --no-sitemaps  --any-site  --include &lt;regex&gt;  --exclude &lt;regex&gt;
+  search &lt;query&gt; [--limit N] [--site S]     Search the local index
+  ask &lt;question&gt; [--deep] [--model M]       Answer from the index (quick) or run the research agent (deep)
+  fetch &lt;url&gt; [--role user|search|corpus] [--index] [--full]
+                                            Fetch one page as Cairn and show robots decision + extraction
+  robots &lt;url&gt; [--file robots.txt]          robots.txt decisions for every Cairn agent
+  keys                                      Web Bot Auth key id and JWKS
+  stats                                     Index and audit-log statistics
+  audit [--limit N] [--role R] [--kind K]   Recent network activity from the audit log
+  index list [--site S] [--limit N] | index clear | index remove &lt;url&gt;
+  doctor                                    Check Node, Claude CLI, data dir, signing key and desktop app
+  fixture [--port 8788]                     Run the Northwind Trails demo site
+  demo [--no-claude] [--keep]               Fixture site → crawl → search → answer, end to end
+  help                                      Show this help
+
+Assistant (talk to the running server — start it with `serve` or `desktop`)
+  chat &lt;message&gt; [--conversation ID] [--no-follow]
+                                            Ask the assistant; streams text, tool steps and approvals
+  remind &lt;text&gt;                             Schedule a reminder, e.g. "in 10 minutes stretch",
+                                            "tomorrow at 9am call mom", "every weekday at 8:30 standup"
+  tasks [list [--all] | cancel &lt;id&gt; | run &lt;id&gt;]
+                                            Upcoming reminders and recurring tasks
+  approvals [list | approve &lt;id&gt; [--always] | deny &lt;id&gt; [--message M]]
+                                            Tool calls waiting for your decision
+  shopping                                  The shopping list (Cairn never pays for anything)
+  assistant                                 Open the full-page assistant in your browser
+  desktop [--rebuild | --restart | --quit]  Build (if needed) and launch the floating desktop bubble
+      (assistant commands use http://127.0.0.1:&lt;port&gt;; --port overrides the configured port)
+
+Global options
+  --data-dir &lt;dir&gt;   Data directory (default ./data or $CAIRN_HOME)
+  --json             Machine-readable output (search, robots, stats, fetch, ask, crawl, keys, audit, doctor)
+  --no-color         Disable colours (NO_COLOR is also respected)</code></pre>
+
+    <!-- ============================== assistant ============================== -->
+    <h2 id="assistant-commands">Assistant commands</h2>
+    <p>The assistant commands are thin <strong>HTTP clients of the running server</strong>. They do not build the runtime in-process like the engine commands do. They call <code>/api/assistant/*</code> on <code>http://127.0.0.1:&lt;port&gt;</code>, where the port is <code>--port</code> if given, otherwise the configured port (<code>$CAIRN_PORT</code> or <code>8787</code>, read through <code>--data-dir</code> / <code>$CAIRN_HOME</code>). Start the server first with <code>serve</code>, or with <code>desktop</code>, whose app starts it for you. If nothing answers, the command prints the error below and exits 1:</p>
+    <pre class="code"><code>Cairn is not running at http://127.0.0.1:8787 (ECONNREFUSED).
+Start it with 'node bin/cairn.js serve' or 'node bin/cairn.js desktop'.</code></pre>
+    <p>A server that answers but has no assistant routes (an older build) gives <em>The server at … has no assistant API (an older Cairn?). Restart it.</em> Every assistant command accepts <code>--json</code>, which prints the API response on stdout. Chat progress lines go to stderr, so <code>| jq</code> works.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Command</th><th>Options</th><th>API calls</th></tr>
+      <tr><td><a href="#chat"><code>chat &lt;message&gt;</code></a></td><td><code>--conversation ID</code>, <code>--no-follow</code>, <code>--json</code>, <code>--port N</code></td><td><code>POST /api/assistant/chat</code>, then <code>GET /api/assistant/runs/:runId/events</code> (SSE)</td></tr>
+      <tr><td><a href="#remind"><code>remind &lt;text&gt;</code></a></td><td><code>--json</code>, <code>--port N</code></td><td><code>POST /api/assistant/tasks {text}</code></td></tr>
+      <tr><td><a href="#tasks"><code>tasks [list | cancel &lt;id&gt; | run &lt;id&gt;]</code></a></td><td><code>--all</code> (list), <code>--json</code>, <code>--port N</code></td><td><code>GET /api/assistant/tasks</code>, <code>DELETE /api/assistant/tasks/:id</code>, <code>POST /api/assistant/tasks/:id/run</code></td></tr>
+      <tr><td><a href="#approvals"><code>approvals [list | approve &lt;id&gt; | deny &lt;id&gt;]</code></a></td><td><code>--always</code> (approve), <code>--message M</code> (deny), <code>--json</code>, <code>--port N</code></td><td><code>GET /api/assistant/approvals</code>, <code>POST /api/assistant/approvals/:id</code></td></tr>
+      <tr><td><a href="#shopping"><code>shopping</code></a></td><td><code>--all</code>, <code>--json</code>, <code>--port N</code></td><td><code>GET /api/assistant/shopping</code></td></tr>
+      <tr><td><a href="#assistant-cmd"><code>assistant</code></a></td><td><code>--port N</code></td><td><code>GET /api/assistant/health</code>, then opens <code>/assistant</code> in the browser</td></tr>
+      <tr><td><a href="#desktop"><code>desktop</code></a></td><td><code>--install</code> (with <code>--no-launch</code>), <code>--rebuild</code>, <code>--restart</code>, <code>--quit</code></td><td>none. It runs <code>desktop/install.sh</code> (with <code>--install</code>) or <code>desktop/run.sh</code>.</td></tr>
+    </table></div>
+
+    <!-- ============================== chat ============================== -->
+    <h2 id="chat">chat</h2>
+    <p>Sends a message to the assistant. This starts a <strong>background run</strong>, and the command then follows it live. Assistant text goes to stdout. Status lines (<code>·</code>), tool calls (<code>→</code>), tool results (<code>←</code>) and approval requests go to stderr. When a tool needs approval, the command prints the exact <code>approvals approve</code> / <code>deny</code> commands, and you can also decide in the chat panel or the bubble. <strong>Ctrl-C detaches</strong>: the run keeps going on the server, and you get a macOS notification when it finishes.</p>
+    <pre class="code"><code>cairn chat &lt;message…&gt; [--conversation &lt;id&gt;] [--no-follow] [--json]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>--conversation &lt;id&gt;</code></td><td>new conversation</td><td>Continue an existing conversation. Claude resumes its session (<code>--resume</code>), so it remembers earlier turns. The id is printed after every chat.</td></tr>
+      <tr><td><code>--no-follow</code></td><td>off</td><td>Start the run and return at once: <em>Started run … in the background. Follow it in the assistant: http://127.0.0.1:8787/assistant</em>.</td></tr>
+      <tr><td><code>--json</code></td><td>off</td><td>At the end, print <code>{runId, conversationId, background, state, text, costUsd}</code> on stdout. Streamed text goes to stderr instead.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js chat "Remind me to stretch in 20 minutes"
+· run run-mfqa1b2c-1a2b3c4d · conversation c-mfqa1b2c-5e6f7a8b
+· Starting Claude (sonnet)…
+→ Schedule "Stretch" at 2026-09-30T16:55:00-07:00
+← Scheduled "Stretch" for Wed 4:55 PM
+Done. I'll remind you to stretch at 4:55 PM today.
+
+done · $0.0123
+Continue: node bin/cairn.js chat --conversation c-mfqa1b2c-5e6f7a8b "…"</code></pre>
+    <p class="diagram-caption">Illustrative output: the tool summaries and the reply come from the live run. Exit status: <code>0</code> when the run finished in state <code>done</code> or you detached, <code>1</code> for <code>error</code> or <code>cancelled</code>, and <code>2</code> for an empty message.</p>
+
+    <!-- ============================== remind ============================== -->
+    <h2 id="remind">remind</h2>
+    <p>Schedules a reminder from plain English, without involving Claude. The text is parsed on the server by <code>parseWhen</code>, which understands forms such as "in 10 minutes", "at 5pm", "tomorrow at 9am", "tonight", "next monday at 10", "every weekday at 8:30" and "every 30 minutes". Phrases like "remind me to" are removed from the title. When the fire time comes, you get a macOS notification and the avatar switches to its attention state.</p>
+    <pre class="code"><code>cairn remind &lt;text…&gt; [--json]</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js remind "tomorrow at 9am call mom"
+✔ Scheduled call mom for Thu, Oct 1, 9:00 AM (once, id task_mfqa3x0e0c1d2e3f)
+
+$ node bin/cairn.js remind "every weekday at 8:30 standup"
+✔ Scheduled standup for Thu, Oct 1, 8:30 AM (every weekday at 08:30, id task_mfqa3y9k4a5b6c7d)</code></pre>
+    <p>If no time can be found, the server answers 400 and the command exits 1 with <em>Could not work out when from "…" — try e.g. "in 10 minutes", "tomorrow at 9am" or "every weekday at 8:30"</em>. Recurring <em>agent</em> tasks (a prompt Claude runs on a schedule) are created by asking in <code>chat</code>, for example <em>"every weekday at 8:30 summarise the tech news"</em>, or with <a href="api.html#as-tasks"><code>POST /api/assistant/tasks</code></a> and <code>kind: "agent"</code>.</p>
+
+    <!-- ============================== tasks ============================== -->
+    <h2 id="tasks">tasks</h2>
+    <p>Lists and manages reminders and recurring tasks. The subcommand defaults to <code>list</code>.</p>
+    <pre class="code"><code>cairn tasks [list] [--all] [--json]    # upcoming tasks, soonest first; --all adds done and cancelled ones
+cairn tasks cancel &lt;id&gt;                 # stop a task (recurring tasks stop repeating)
+cairn tasks run &lt;id&gt;                    # fire it now, as if it were due (waits up to 10 min for agent tasks)</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js tasks
+  standup  [reminder]
+    id task_mfqa3y9k4a5b6c7d  next Thu, Oct 1, 8:30 AM  repeat every weekday at 08:30  active
+  Summarise the tech news  [agent]
+    id task_mfqa40aa9e8f7a6b  next Thu, Oct 1, 8:30 AM  repeat every weekday at 08:30  active</code></pre>
+    <p>An empty list prints a hint to use <code>remind</code>. An unknown id exits 1 with <em>Unknown task: …</em>. A subcommand other than <code>list</code>, <code>cancel</code> or <code>run</code>, or a missing id, is a usage error (exit 2).</p>
+
+    <!-- ============================== approvals ============================== -->
+    <h2 id="approvals">approvals</h2>
+    <p>Shows and decides tool calls that are waiting for you, the same Approve / Deny / Always allow cards the chat panel shows. The subcommand defaults to <code>list</code>.</p>
+    <pre class="code"><code>cairn approvals [list] [--json]
+cairn approvals approve &lt;id&gt; [--always]     # --always: allow this tool for the rest of the conversation
+cairn approvals deny &lt;id&gt; [--message &lt;text&gt;] # the message is passed to Claude (default "Denied from the command line")</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js approvals
+  Run shell command: ls -la ~/Downloads  [Bash]
+    id ap-mfqa5c1d-2b3c4d5e  since Wed, Sep 30, 4:41 PM  run run-mfqa1b2c-1a2b3c4d
+    input: {"command":"ls -la ~/Downloads","description":"List Downloads"}
+    approve: node bin/cairn.js approvals approve ap-mfqa5c1d-2b3c4d5e   deny: node bin/cairn.js approvals deny ap-mfqa5c1d-2b3c4d5e
+
+$ node bin/cairn.js approvals approve ap-mfqa5c1d-2b3c4d5e --always
+✔ Approved ap-mfqa5c1d-2b3c4d5e (always allowing Bash in this conversation)</code></pre>
+    <p>Deciding an approval that was already decided (for example in the chat panel) exits 1 with <em>This approval was already decided</em>. Approvals nobody answers are denied automatically after 5 minutes, or after 60 seconds in an unattended scheduled run.</p>
+
+    <!-- ============================== shopping ============================== -->
+    <h2 id="shopping">shopping</h2>
+    <p>Prints the shopping list the assistant keeps while it researches products for you: item, quantity, price, store, link and notes. By default only open items are shown. <code>--all</code> includes ticked ones (<code>✔</code>). Cairn never pays for anything, and checkout is always up to you.</p>
+    <pre class="code"><code>cairn shopping [--all] [--json]</code></pre>
+    <pre class="code"><code>$ node bin/cairn.js shopping
+  • Shark NV352 Navigator $179.99 · Target
+    https://www.target.com/p/…
+    Quietest of the three compared (72 dB)
+
+Cairn never pays for anything — checkout is always yours.</code></pre>
+    <p>Add or remove items by asking in <code>chat</code> or the chat panel, or with <a href="api.html#as-shopping"><code>/api/assistant/shopping</code></a>.</p>
+
+    <!-- ============================== assistant ============================== -->
+    <h2 id="assistant-cmd">assistant</h2>
+    <p>Opens the full-page assistant (the same UI as the bubble's chat panel, served at <code>/assistant</code>) in your default browser. It checks <code>/api/assistant/health</code> first, with a 5 s timeout, so you get the "not running" message instead of a browser error page. Use it on machines without the desktop app, or when you want a big window.</p>
+    <pre class="code"><code>$ node bin/cairn.js assistant
+Opening http://127.0.0.1:8787/assistant</code></pre>
+
+    <!-- ============================== desktop ============================== -->
+    <h2 id="desktop">desktop</h2>
+    <p>Launches the floating avatar bubble: the installed <code>/Applications/Cairn.app</code> (or <code>~/Applications/Cairn.app</code>) if there is one, otherwise <code>desktop/build/Cairn.app</code>, built first if needed. <code>--install</code> installs it into Applications and keeps it in the Dock, so you can start it from the Dock, Spotlight, the Apps view (Launchpad) or Finder. This is macOS only. On other platforms it exits 1 and suggests <code>assistant</code>. The command runs <code>bash desktop/install.sh</code> (with <code>--install</code>) or <code>bash desktop/run.sh</code> with the flags below and exits with that script's status. The app starts the server itself if nothing is answering on the port. See <a href="desktop.html">Floating bubble app</a>.</p>
+    <pre class="code"><code>cairn desktop [--rebuild | --restart | --quit]
+cairn desktop --install [--no-launch] [--no-dock] [--rebuild]</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Option</th><th>Description</th></tr>
+      <tr><td>(none)</td><td>If Cairn is installed: open the installed copy, after updating it with <code>install.sh --no-dock</code> (an update never changes the Dock) when <code>CairnBubble.swift</code>, <code>Info.plist</code>, <code>build.sh</code>, the icon or an avatar page is newer than the build, or the build is newer than the installed copy. If it is already running, this opens its chat panel, the same as clicking its Dock icon. Otherwise: rebuild when those sources are newer than the app (restarting an older running copy), then <code>open desktop/build/Cairn.app</code>. Another running copy is quit first, because the app exits when one is already running.</td></tr>
+      <tr><td><code>--install</code></td><td>Build if missing or outdated, quit any running Cairn, copy it to <code>/Applications/Cairn.app</code> (or <code>~/Applications</code>), check or redo the ad-hoc signature, register it with LaunchServices, add it to the Dock if the Dock has no tile for it yet (restarting the Dock once, only then) and start it. Re-run it after code changes. Cannot be combined with <code>--quit</code> or <code>--restart</code> (exit 2).</td></tr>
+      <tr><td><code>--no-launch</code></td><td>With <code>--install</code>: install or update without starting it (exit 2 without <code>--install</code>)</td></tr>
+      <tr><td><code>--no-dock</code></td><td>With <code>--install</code>: leave the Dock alone, so no tile is added and the Dock is not restarted (exit 2 without <code>--install</code>). <code>CAIRN_NO_DOCK=1</code> does the same for <code>bash desktop/install.sh</code>. To unpin later: right-click the Dock icon → Options → uncheck Keep in Dock.</td></tr>
+      <tr><td><code>--rebuild</code></td><td>Force a rebuild first (and reinstall, if Cairn is installed)</td></tr>
+      <tr><td><code>--restart</code></td><td>Quit a running instance, rebuild if needed, and relaunch</td></tr>
+      <tr><td><code>--quit</code></td><td>Quit Cairn (SIGTERM, then SIGKILL after 6 s). The app stops the server only if it started it.</td></tr>
+    </table></div>
+    <pre class="code"><code>$ node bin/cairn.js desktop --install
+[cairn-install] quitting the running Cairn…
+[cairn-install] Cairn quit
+[cairn-install] installing /Applications/Cairn.app
+[cairn-install] signature ok (adhoc)
+[cairn-install] Dock: added Cairn to the Dock (restarted the Dock once). To remove it: right-click the Dock icon › Options › uncheck Keep in Dock
+[cairn-install] Cairn is running (pid 60507) — look for the animated avatar at the top-right of your screen
+[cairn-install] server healthy at http://127.0.0.1:8787
+[cairn-install] done: /Applications/Cairn.app — start it any time from the Dock, Spotlight (⌘Space › Cairn), Apps / Launchpad or the Applications folder
+
+$ node bin/cairn.js desktop
+[cairn] Cairn is running from /Applications/Cairn.app — look for the animated avatar at the top-right of your screen.</code></pre>
+
+    <h2 id="exit-codes">Exit codes</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Code</th><th>Meaning</th><th>Examples</th></tr>
+      <tr><td><code>0</code></td><td>Success.</td><td>Any command that completed; <code>doctor</code> with only warnings; <code>search</code> with no results.</td></tr>
+      <tr><td><code>1</code></td><td>Runtime failure or negative result.</td><td><code>fetch</code> result not a 2xx page (robots refusal, HTTP 4xx/5xx, network error); crawl job ended in state <code>error</code>; <code>index remove</code> of a URL that is not indexed; a failed <code>doctor</code> check; invalid values rejected by the core (e.g. a non-http seed URL, an unknown <code>--role</code>); port already in use. The message is printed as <code>error: …</code> on stderr (<code>CAIRN_DEBUG=1</code> adds the stack trace).</td></tr>
+      <tr><td><code>1</code> (assistant)</td><td>Assistant command failed.</td><td>The server is not running or has no assistant API; the API answered with an error (unknown id, approval already decided, no time found in <code>remind</code> text); a <code>chat</code> run ended in <code>error</code> or <code>cancelled</code>; <code>desktop</code> on a non-Mac. <code>desktop</code> otherwise exits with the status of <code>desktop/run.sh</code>.</td></tr>
+      <tr><td><code>2</code></td><td>Usage error.</td><td>Unknown command or option, missing required argument, option without a value, integer option out of range.</td></tr>
+      <tr><td><code>130</code></td><td>Interrupted.</td><td>Second Ctrl-C during <code>crawl</code> (the first one cancels the job gracefully and exits normally).</td></tr>
+    </table></div>
+
+    <h2 id="env">Environment variables</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+      <tr><td><code>CAIRN_HOME</code></td><td><code>&lt;project&gt;/data</code></td><td>Data directory: <code>index.json</code>, <code>audit.ndjson</code>, <code>keys/</code>, <code>corpus/</code>, <code>config.json</code>, <code>agent-work/</code>. <code>--data-dir</code> overrides it.</td></tr>
+      <tr><td><code>CAIRN_PORT</code></td><td><code>8787</code></td><td>Default port for <code>serve</code> (and for the default public URL).</td></tr>
+      <tr><td><code>CAIRN_HOST</code></td><td><code>127.0.0.1</code></td><td>Default bind address for <code>serve</code>. Changing it is not recommended — the API has no authentication.</td></tr>
+      <tr><td><code>CAIRN_PUBLIC_URL</code></td><td><code>http://127.0.0.1:&lt;port&gt;</code></td><td>Public base URL used in the User-Agent (<code>+&lt;url&gt;/bot</code>), the <code>Signature-Agent</code> header and on <code>/bot</code>. When set, the server keeps it after binding and also accepts that URL's host in the <code>Host</code> guard. Set it when the bot page and key directory are published elsewhere.</td></tr>
+      <tr><td><code>CAIRN_CONTACT</code></td><td><code>cairn-operator@localhost</code></td><td>Sent in the <code>From</code> request header and shown on <code>/bot</code>.</td></tr>
+      <tr><td><code>CAIRN_MODEL</code></td><td><code>sonnet</code></td><td>Default Claude model alias for answers and research (<code>--model</code> overrides per call).</td></tr>
+      <tr><td><code>CAIRN_CLAUDE_BIN</code></td><td><code>claude</code></td><td>Path to the Claude CLI. It cannot be changed over HTTP. Tests point it at <code>test/fixtures/fake-claude.js</code>.</td></tr>
+      <tr><td><code>NO_COLOR</code></td><td>unset</td><td>Any non-empty value disables ANSI colours (see <a href="https://no-color.org/">no-color.org</a>). <code>FORCE_COLOR=1</code> forces colours on.</td></tr>
+      <tr><td><code>CAIRN_MAC_DRYRUN</code></td><td>unset</td><td>Set to <code>1</code> for the <em>server</em> process to make the assistant's Mac actions (notifications, Reminders, Calendar, open, clipboard) return the AppleScript instead of running it. Used by the tests.</td></tr>
+      <tr><td><code>CAIRN_DEBUG</code></td><td>unset</td><td>Print stack traces for CLI errors.</td></tr>
+      <tr><td><code>CAIRN_LIVE_CLAUDE</code></td><td>unset</td><td>Tests only: <code>1</code> enables <code>test/live-claude.test.js</code> (real, billed Claude calls).</td></tr>
+    </table></div>
+    <p>Precedence: command-line option &gt; <code>&lt;dataDir&gt;/config.json</code> &gt; environment variable &gt; built-in default. <code>config.json</code> only holds the editable keys (<code>contact</code>, <code>agent</code>, <code>politeness</code>, <code>robots</code>, <code>crawl</code>, <code>fetch</code>, <code>signing</code>) and is written when settings are saved from the UI or <code>POST /api/config</code>. After that, the saved <code>contact</code>, <code>agent.model</code> and <code>agent.claudeBin</code> win over <code>CAIRN_CONTACT</code>, <code>CAIRN_MODEL</code> and <code>CAIRN_CLAUDE_BIN</code>. Port, host, public URL and data directory are never persisted, so their variables always apply.</p>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

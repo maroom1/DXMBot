@@ -1,0 +1,8 @@
+{
+  "default": "aurora",
+  "styles": [
+    { "key": "aurora", "file": "avatar-aurora.html", "name": "Aurora Orb" },
+    { "key": "dots", "file": "avatar-dots.html", "name": "Constellation Dots" },
+    { "key": "buddy", "file": "avatar-buddy.html", "name": "Buddy" }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "cairn",
+  "version": "1.0.0",
+  "description": "Cairn — a personal macOS desktop assistant (floating bubble, background runs, reminders, research, shopping, approvals; Claude CLI brain) with a transparent, robots.txt-respecting search/crawl engine.",
+  "type": "module",
+  "bin": {
+    "cairn": "bin/cairn.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bin/cairn.js serve",
+    "desktop": "node bin/cairn.js desktop",
+    "fixture": "node bin/cairn.js fixture",
+    "demo": "node bin/cairn.js demo",
+    "test": "node --test --test-concurrency=4 test/*.test.js",
+    "test:live": "CAIRN_LIVE_CLAUDE=1 node --test test/live-claude.test.js"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

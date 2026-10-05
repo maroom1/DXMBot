@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing &amp; results — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Testing &amp; results</h1>
+    <p class="lead">How Cairn proves it is a well-behaved bot: fast unit tests for every parser and policy, integration tests over real sockets, an end-to-end crawl of a purpose-built fixture site, and an opt-in live run against the real Claude CLI. The desktop assistant adds tests for the scheduler, approvals, background runs, MCP tools and routes, plus live scenarios run against the real model.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#strategy">Test strategy</a></li>
+      <li><a href="#pyramid">Test pyramid</a></li>
+      <li><a href="#matrix">Test matrix</a></li>
+      <li><a href="#fixture">Fixture site map</a></li>
+      <li><a href="#compliance">Compliance assertions</a></li>
+      <li><a href="#run">How to run</a></li>
+      <li><a href="#fakes">Fakes, isolation &amp; determinism</a></li>
+      <li><a href="#results">Latest results</a></li>
+      <li><a href="#evidence">Evidence: live-test screenshots</a></li>
+    </ol></div>
+
+    <h2 id="strategy">Test strategy</h2>
+    <p>All tests use the built-in <code>node:test</code> runner and <code>node:assert/strict</code> — no npm packages, no network beyond <code>127.0.0.1</code>. Each layer answers a different question:</p>
+    <div class="cards">
+      <div class="card"><h3><span class="badge good">Unit</span> Is each policy exactly right?</h3><p>robots.txt parsing and longest-match rules, rate-limit timing with injected clocks, Ed25519 signature bases, HTML/sitemap extraction, tokenizer and BM25 ranking. Pure functions and small classes with fakes; milliseconds per test.</p></div>
+      <div class="card"><h3><span class="badge info">Integration</span> Do the parts cooperate over real HTTP?</h3><p>Fetcher against throwaway local servers (redirect chains, 429 + Retry-After, truncation, timeouts), crawler against a small site, MCP server over stdio, HTTP API guards and routes on port 0, agent runner against a fake Claude CLI.</p></div>
+      <div class="card"><h3><span class="badge warn">End-to-end</span> Does the whole system behave on a hostile-ish site?</h3><p>A full runtime crawls the Northwind Trails fixture and the test inspects <em>what the fixture actually received</em>: which paths, which User-Agent, which signatures. Then search, sign-verified user fetch and a cited answer via the fake Claude.</p></div>
+      <div class="card"><h3><span class="badge bad">Live Claude</span> Does it work with the real model?</h3><p>Opt-in (<code>CAIRN_LIVE_CLAUDE=1</code>): one real quick answer and one real deep-research run over the fixture. Costs a few cents; skipped by default so CI stays free and offline.</p></div>
+    </div>
+    <p>The guiding rule: <strong>compliance is asserted from the server's point of view.</strong> It is not enough that the crawler <em>says</em> it skipped <code>/private/</code>; the fixture's request log must show it never asked.</p>
+
+    <h2 id="pyramid">Test pyramid</h2>
+    <div class="diagram-title">Figure 1 — Test pyramid</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  L["Live Claude<br/>live-claude.test.js<br/>opt-in, real model, cents"]
+  E["End-to-end<br/>e2e.test.js<br/>runtime + fixture site + server + fake Claude"]
+  I["Integration<br/>fetcher, crawler, server, agent, mcp<br/>real sockets on 127.0.0.1, fake Claude CLI"]
+  U["Unit<br/>robots, ratelimit, signing, extract, index<br/>pure logic, injected clocks, no I/O"]
+  L --- E
+  E --- I
+  I --- U
+  style L fill:#fee2e2,stroke:#b91c1c,color:#1d2330
+  style E fill:#fef3c7,stroke:#b45309,color:#1d2330
+  style I fill:#e6f2ee,stroke:#2f6f5e,color:#1d2330
+  style U fill:#dcfce7,stroke:#15803d,color:#1d2330
+    </pre></div>
+    <p class="diagram-caption">Most assertions live at the bottom where they are fast and precise; each higher layer adds fewer, broader tests that prove the wiring.</p>
+
+    <h2 id="matrix">Test matrix</h2>
+    <p>There are 19 test files with 399 test cases in the default run (counts as of 2026-09-30; per-file numbers are in <a href="#results">Latest results</a>). <code>npm test</code> passes 397 and skips 2 live-only cases. The live engine file adds 2 more cases when <code>CAIRN_LIVE_CLAUDE=1</code> is set. Each module owner wrote the tests for their module, and the fixture owner wrote the end-to-end and live tests.</p>
+    <div class="table-scroll"><table>
+      <tr><th>File</th><th>Layer</th><th>Cases</th><th>Module under test</th><th>What it covers</th></tr>
+      <tr><td><code>test/robots.test.js</code></td><td>Unit</td><td>51</td><td><code>src/robots/parser.js</code>, <code>src/robots/cache.js</code></td><td>RFC 9309 parsing (BOM, CRLF and lone CR, comments, unknown directives, grouped user-agents, rules before any UA ignored, 500 KiB cap, empty input); group selection (most specific token first, family-token fallback <code>CairnSearch → Cairn → *</code>, merging duplicate groups, <code>CairnSearch/1.0</code> UA lines, hyphenated <code>Cairn-User</code>); longest match, allow-wins ties, <code>*</code> and <code>$</code>, path + query, percent-encoding equivalence, <code>/robots.txt</code> always allowed, pathological wildcards; the RFC 9309 and Google documented examples; <code>explainDecision</code>; cache status mapping (2xx parse, 4xx allow-all, 429/5xx/network → stale copy or disallow-all cached ≤ 10 min), TTL, per-origin keys, shared in-flight fetches, <code>check()</code> per role, <code>entries/invalidate/clear</code>.</td></tr>
+      <tr><td><code>test/ratelimit.test.js</code></td><td>Unit</td><td>15</td><td><code>src/net/ratelimit.js</code></td><td>Per-host FIFO with minimum delay, crawl-delay overriding <code>minDelayMs</code>, hosts in parallel while one host is serialised, global cap, no global slot held while waiting on a host delay, per-host concurrency &gt; 1, exponential backoff with cap and Retry-After winning, reward reset, stats, aborting a queued task, options read at use time, <code>parseRetryAfter</code> for seconds and HTTP-dates.</td></tr>
+      <tr><td><code>test/signing.test.js</code></td><td>Unit</td><td>11</td><td><code>src/net/signing.js</code></td><td>RFC 8037 thumbprint vector, headers that verify, exact RFC 9421 §2.5 signature base, coverage of <code>@authority</code> and <code>signature-agent</code>, expired / future / unknown-keyid / wrong-tag / missing-header / tampered failures, signing disabled, config read at use time, key pair persisted with a 0600 private key, JWKS <code>kid</code> = thumbprint, keys without <code>kid</code>.</td></tr>
+      <tr><td><code>test/fetcher.test.js</code></td><td>Integration</td><td>32</td><td><code>src/net/fetcher.js</code></td><td>Honest identity and Web Bot Auth headers; robots disallow without contacting the page; per-role groups; redirect into a disallowed path blocked with the target never requested; same-origin and cross-origin redirects (second origin's robots.txt fetched); redirect loops; non-http redirect; 429 + Retry-After and 503 retries; network errors; unreachable robots.txt = disallow-all; <code>maxBytes</code> truncation of an endless body; timeout; scheme, invalid-URL and private-network blocks; <code>X-Robots-Tag</code> incl. bot-scoped directives; user role respecting robots by default and the override; charset; <code>fetchRaw</code>; robots audit kind; injected <code>fetchImpl</code>; caller abort.</td></tr>
+      <tr><td><code>test/extract.test.js</code></td><td>Unit</td><td>28</td><td><code>src/extract/html.js</code>, <code>src/extract/sitemap.js</code></td><td>Title/description/lang/canonical (with og:title and h1 fallbacks); skipped script/style/noscript/template/svg/iframe content; comments, CDATA, doctype; malformed HTML (uppercase tags, unquoted attributes, unclosed tags, stray <code>&lt;</code>); entity decoding incl. numeric and cp1252; whitespace; markdown for headings, lists, links, code, bold, pre, blockquote; links with <code>&lt;base href&gt;</code>, normalisation, dropped schemes, <code>rel=nofollow</code>, dedupe; meta robots (<code>none</code>, bot-specific tokens); large pages; <code>extractText</code>; sitemaps: urlset, sitemapindex, namespaced, plain text, RSS/Atom, garbage.</td></tr>
+      <tr><td><code>test/index.test.js</code></td><td>Unit</td><td>17</td><td><code>src/index/tokenize.js</code>, <code>src/index/store.js</code></td><td>Tokenizer (stopwords, Unicode, accents, numbers, light stemming); BM25 with title boost; stemming across forms; multi-term preference, limit/offset; site filter (option and inline <code>site:</code>); ~30-word snippets; added/updated/unchanged by content hash; URL normalisation; remove/clear; <code>nosnippet</code> excluded from snippets and passages; ~120-word passages with 20-word overlap; <code>findByHash</code>/list/stats; atomic save/load, debounced and serialised saves; 2000-doc performance (search &lt; 50 ms).</td></tr>
+      <tr><td><code>test/crawler.test.js</code></td><td>Integration</td><td>25</td><td><code>src/crawl/crawler.js</code>, <code>jobs.js</code>, <code>corpus.js</code></td><td>Depth and page limits; same-site scope (<code>www.</code> is the same site); include/exclude patterns; page-level and <code>rel=nofollow</code>; meta/X-Robots-Tag noindex (links still followed); bot-specific meta tag; canonical and content-hash duplicates; sitemap-index recursion finding an orphan; <code>useSitemaps=false</code>; robots-blocked URLs never requested; non-HTML skipped, text/plain indexed, HTTP errors counted; corpus role writing JSONL and never touching the index; role validation; cancel; event payloads and exact <code>status()</code> shape; <code>recent</code> capped at 50; JobManager create/list/get/cancel/waitFor and 50-job cap; corpus writer; real SearchIndex.</td></tr>
+      <tr><td><code>test/agent.test.js</code></td><td>Integration</td><td>16</td><td><code>src/agent/claude.js</code>, <code>answer.js</code>, <code>research.js</code></td><td>Documented CLI flag set; <code>claudeAvailable</code>; stream-json parsing with the prompt on stdin; kill on timeout and abort; missing binary; CLI errors and garbage output; citation-number parsing (lists, ranges, repeats); quick answer mapping <code>[n]</code> to sources; extractive fallback when the CLI is missing or fails; empty-index message without calling Claude; deep research MCP config and cited-source mapping; <code>allowLiveFetch:false</code>; deep degrading to quick.</td></tr>
+      <tr><td><code>test/mcp.test.js</code></td><td>Integration</td><td>15</td><td><code>src/agent/mcp-server.js</code></td><td>JSON-RPC over stdio against a fake API: <code>initialize</code>, five tools with JSON-schema inputs, <code>search_index</code> and stable source ids, <code>fetch_page</code> markdown cap and id reuse, robots refusal as a clear (non-error) result, HTTP failure and invalid URL as tool errors, <code>crawl_site</code> polling, <code>check_robots</code>/<code>index_stats</code>, <code>-32601</code>/<code>-32602</code>/<code>-32700</code>, API unreachable, <code>CAIRN_ALLOW_LIVE_FETCH=0</code>.</td></tr>
+      <tr><td><code>test/server.test.js</code></td><td>Integration</td><td>30</td><td><code>src/server/*.js</code>, <code>bin/cairn.js</code></td><td>Loopback bind and <code>publicBaseUrl</code> rewrite; health; identity with full UAs; <code>/bot</code> naming every token; key-directory media type; IP JSON; search validation; robots check with pasted and live robots.txt; <code>/api/fetch</code> extraction and robots; crawl job to completion feeding search; quick ask falling back to extractive; index doc delete; CSRF guards (415, 403); Host guard (421); 413; 404/405; audit list and SSE; config round-trip; sign-preview verified by verify-signature; safe static serving; CLI <code>help</code>, <code>doctor</code>, <code>robots --file</code> and <code>search --json</code>.</td></tr>
+      <tr><td><code>test/fetch-index.test.js</code></td><td>Integration</td><td>8</td><td><code>src/server/api.js</code> (fetch → index path)</td><td>A user fetch never indexes a page that <code>CairnSearch</code> is disallowed from. With <code>respectForUserFetch</code> off, a disallowed page is fetched but still not indexed. Also covers <code>CairnSearch</code>-scoped noindex in a header or meta tag, removing a page that becomes noindex, canonical and duplicate rules, the blocked redirect hop being reported, noarchive and nosnippet display, and the cap on concurrent answers (429).</td></tr>
+      <tr><td><code>test/sse.test.js</code></td><td>Unit</td><td>2</td><td><code>src/server/sse.js</code></td><td>A client that stops reading is dropped instead of buffered without limit. Streams beyond the client cap get 503.</td></tr>
+      <tr><td><code>test/scheduler.test.js</code></td><td>Unit</td><td>59</td><td><code>src/assistant/when.js</code>, <code>src/assistant/scheduler.js</code></td><td>Natural-language <code>parseWhen</code> ("in 10 minutes", "tomorrow at 9am", "every weekday at 8:30", "on friday"). <code>nextOccurrence</code> keeps wall-clock time across DST changes for daily, weekly, weekday, day-filter and interval schedules. Recurrence normalisation, and one-shot reminders firing exactly once. After a sleep, missed days are skipped with no burst of firings, and an overdue one-shot fires once at start. Also covers cancel and update, persistence with atomic files and a corrupt file set aside, run-history cap, a throwing listener, and an unref()ed timer.</td></tr>
+      <tr><td><code>test/assistant-core.test.js</code></td><td>Integration</td><td>19</td><td><code>src/assistant/conversations.js</code>, <code>approvals.js</code>, <code>agent.js</code></td><td>Conversation store persistence. The approval queue: request, pending, resolve or deny, long-poll timeout, timeout-denies. Runs against the fake Claude CLI: status, text, result and done events, and the session reused via <code>--resume</code> (with a retry when resume fails). Safety defaults: isolated Claude settings, a <code>~/CairnWorkspace</code> working directory, and home granted via <code>--add-dir</code>. Also covers CLI errors and a missing binary, the concurrency cap and queueing, serialised runs within a conversation, approvals moving runs to <code>waiting_approval</code>, event replay, persisted and recovered runs, the CLI argument set, and unattended scheduled runs.</td></tr>
+      <tr><td><code>test/assistant-tools.test.js</code></td><td>Integration</td><td>26</td><td><code>src/assistant/mcp-tools.js</code>, <code>src/assistant/macos.js</code></td><td>The assistant MCP server over stdio: tool schemas, <code>schedule_task</code> and task tools, notify, Apple Reminders and Calendar, open URL or app, web research, shopping and clipboard proxies. <code>approval_prompt</code> allow, edited input, deny with the user's message, attended and unattended timeouts, and an unreachable API. stdout stays pure protocol. AppleScript escaping and the macOS script builders run in dry-run mode, and <code>openUrl</code> allows http(s) only. Two LIVE cases are opt-in.</td></tr>
+      <tr><td><code>test/assistant-routes.test.js</code></td><td>Integration</td><td>17</td><td><code>src/assistant/routes.js</code></td><td>The <code>/api/assistant/*</code> routes. Health. Content-type, origin and body-size guards. Settings. Chat runs streamed over SSE, plus background runs and cancel. Last-Event-ID replay, conversations, the approval flow, tasks from text, due reminders broadcast and notified, run-now and <code>task_result</code>, shopping CRUD, macOS actions in dry-run, SSE heartbeats, and conversation deletion.</td></tr>
+      <tr><td><code>test/server-assistant.test.js</code></td><td>Integration</td><td>9</td><td><code>src/server/app.js</code>, <code>api.js</code>, <code>bin/cairn.js</code></td><td>The assistant mounted behind the real server's security checks. A chat run completing. <code>GET /assistant</code> with the HTML CSP. Avatar content types and same-origin framing. The CLI <code>chat</code>/<code>remind</code>/<code>tasks</code>/<code>approvals</code>/<code>shopping</code> commands against a live server, and the "not running" message. Also checks <code>assistant:false</code>, and that <code>close()</code> stops the scheduler so the process exits cleanly.</td></tr>
+      <tr><td><code>test/e2e.test.js</code></td><td>End-to-end</td><td>19</td><td>Whole runtime + <code>fixtures/site-server.js</code></td><td>A real runtime crawls Northwind Trails as <code>CairnSearch</code> and every assertion is made from the fixture's own request log (see <a href="#compliance">compliance assertions</a>); then a corpus crawl, a server on port 0 for Web Bot Auth, user fetches, and a cited quick answer from the fake Claude CLI.</td></tr>
+      <tr><td><code>test/live-claude.test.js</code></td><td>Live</td><td>2</td><td>Real Claude CLI</td><td>Only with <code>CAIRN_LIVE_CLAUDE=1</code>: a real quick answer and a real deep-research run (Claude CLI + Cairn MCP server) over the fixture for "How much does the Ridgeback 45 weigh and what is the return window?". Each must use Claude, mention <code>1.2</code> and <code>60</code>, and cite at least one fixture URL.</td></tr>
+      <tr><td><code>test/fixtures/fake-claude.js</code></td><td>Helper</td><td>—</td><td>—</td><td>Executable stand-in for the Claude CLI: answers <code>--version</code>, reads the prompt from stdin and emits stream-json NDJSON (<code>system/init</code>, <code>assistant</code>, <code>result</code>) citing <code>[1]</code>, so agent paths are testable offline and for free.</td></tr>
+    </table></div>
+
+    <h2 id="fixture">Fixture site map</h2>
+    <p><code>fixtures/site-server.js</code> serves <strong>Northwind Trails</strong>, a fictional outdoor-gear company (HQ at 1420 West Grove Street, Boise, Idaho; founded 2011). Run it with <code>node bin/cairn.js fixture</code> (port 8788) or embed it with <code>startFixtureSite({port: 0})</code>. Its content carries checkable facts — the <em>Ridgeback 45</em> pack weighs 1.2 kg, holds 45 L and costs $189; the <em>Summit Shell</em> jacket costs $249 and is rated 20k mm; returns within 60 days; lifetime warranty on packs — and each route exists to exercise one behaviour. The server records every request (<code>requests: [{ts, method, path, headers}]</code>) so tests can prove what was <em>not</em> fetched; <code>reset()</code> clears the log (and can re-arm the one-shot 429/503 routes).</p>
+    <pre class="code"><code>User-agent: *
+Disallow: /private/
+Disallow: /admin/
+
+User-agent: CairnSearch
+Allow: /private/public-note.html
+Disallow: /private/
+Disallow: /*.pdf$
+Disallow: /search?
+
+User-agent: CairnCorpus
+Disallow: /
+
+Sitemap: &lt;base&gt;/sitemap.xml</code></pre>
+
+    <div class="diagram-title">Figure 2 — Northwind Trails routes and the behaviour each one exercises</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  ROOT["/ (home)"]
+  subgraph CONTENT["Content (indexed)"]
+    ABOUT["/about.html"]
+    PRODS["/products/<br/>product index"]
+    RB45["/products/ridgeback-45.html<br/>1.2 kg, $189, 45 L"]
+    SHELL["/products/summit-shell.html<br/>$249, 20k mm"]
+    FAQ["/faq.html<br/>60-day returns, warranty"]
+    BLOG["/blog/ and post-1..3"]
+    DEEP["/blog/deep/level-3.html<br/>then level-4.html"]
+  end
+  subgraph ROBOTS["robots.txt rules"]
+    SECRET["/private/secret.html<br/>disallowed for all"]
+    NOTE["/private/public-note.html<br/>allowed for CairnSearch only"]
+    ADMIN["/admin/ and /admin/index.html<br/>disallowed for all"]
+    PDF["/file.pdf<br/>Disallow /*.pdf$"]
+    SRCH["/search?q=x<br/>Disallow /search?"]
+  end
+  subgraph DIRECTIVES["Page directives"]
+    NOIDX["/noindex.html<br/>meta noindex, links followed"]
+    VIANOIDX["/via-noindex.html"]
+    XR["/xrobots.html<br/>X-Robots-Tag noindex"]
+    NOF["/nofollow.html<br/>meta nofollow"]
+    HIDDEN["/hidden-behind-nofollow.html<br/>must stay undiscovered"]
+    RELNOF["/rel-nofollow.html"]
+    HIDDEN2["/hidden-rel-nofollow.html<br/>must stay undiscovered"]
+  end
+  subgraph DEDUP["Duplicates and types"]
+    CANON["/canonical-dup.html<br/>canonical to about"]
+    DUP["/dup-content.html<br/>same text as post-1"]
+    DJSON["/data.json<br/>skipped-type"]
+  end
+  subgraph HTTPB["HTTP behaviour"]
+    R301["/redirect<br/>301 to about"]
+    R302["/redirect-to-private<br/>302 into /private/"]
+    RL["/rate-limited<br/>429 + Retry-After 1, then 200"]
+    FLAKY["/flaky<br/>503 once, then 200"]
+    SLOW["/slow<br/>3 s delay, timeouts"]
+  end
+  subgraph DISC["Discovery and identity (not linked from home)"]
+    SMI["/sitemap.xml<br/>sitemapindex"]
+    SMP["/sitemap-pages.xml"]
+    ORPHAN["/orphan.html<br/>only in sitemap"]
+    SIGNED["/signed-only<br/>200 only with valid Web Bot Auth"]
+    ECHO["/echo-headers<br/>shows UA and From"]
+  end
+  ROOT --> CONTENT
+  ROOT --> ROBOTS
+  ROOT --> DIRECTIVES
+  ROOT --> DEDUP
+  ROOT --> HTTPB
+  PRODS --> RB45
+  PRODS --> SHELL
+  BLOG --> DEEP
+  NOIDX --> VIANOIDX
+  NOF -.-> HIDDEN
+  RELNOF -.-> HIDDEN2
+  R302 -.->|"blocked on hop"| SECRET
+  SMI --> SMP --> ORPHAN
+    </pre></div>
+    <p class="diagram-caption">Dotted edges are links a compliant crawler must not follow (nofollow) or redirects it must refuse (into a disallowed path). The orphan page is reachable only through the sitemap index.</p>
+
+    <h2 id="compliance">Compliance assertions</h2>
+    <p>The end-to-end suite crawls the fixture once with the <code>search</code> role (<code>maxPages: 60</code>, <code>maxDepth: 6</code>, politeness delays set to zero) and then checks the fixture's own request log, the index and the audit log. Each row is a hard assertion in <code>test/e2e.test.js</code>:</p>
+    <div class="table-scroll"><table>
+      <tr><th>Behaviour</th><th>Route(s)</th><th>Assertion</th></tr>
+      <tr><td>robots.txt first, fetched once</td><td><code>/robots.txt</code></td><td>First request of the crawl, and requested exactly once (then cached).</td></tr>
+      <tr><td>Honest identity on every request</td><td>all</td><td>UA contains <code>CairnSearch/1.0</code> and <code>+…/bot</code>, never <code>Chrome/</code>, <code>Safari/</code> or <code>Firefox/</code>; <code>From</code> header present; <code>Signature-Input</code> with <code>tag="web-bot-auth"</code> and <code>Signature-Agent</code> present.</td></tr>
+      <tr><td>Disallowed paths never requested</td><td><code>/private/*</code>, <code>/admin/*</code>, <code>/search?…</code>, <code>/file.pdf</code></td><td>Absent from <code>fixture.requests</code> (except the explicitly allowed note).</td></tr>
+      <tr><td>Token-specific Allow beats generic Disallow</td><td><code>/private/public-note.html</code></td><td>Requested and indexed by <code>CairnSearch</code>.</td></tr>
+      <tr><td>Robots re-checked on redirect hops</td><td><code>/redirect-to-private</code></td><td>The redirecting URL is requested, <code>/private/secret.html</code> is not; outcome <code>blocked-robots</code>; the audit log records the block; the secret page is not indexed.</td></tr>
+      <tr><td>Meta robots and X-Robots-Tag noindex</td><td><code>/noindex.html</code>, <code>/xrobots.html</code></td><td>Fetched but not indexed; <code>/via-noindex.html</code> (linked only from the noindex page) is still discovered.</td></tr>
+      <tr><td>Nofollow</td><td><code>/nofollow.html</code>, <code>/rel-nofollow.html</code></td><td>Their hidden targets are never discovered or requested.</td></tr>
+      <tr><td>Sitemap discovery</td><td><code>/sitemap.xml</code> → <code>/sitemap-pages.xml</code> → <code>/orphan.html</code></td><td>The orphan page (in no link) is indexed.</td></tr>
+      <tr><td>Depth limit</td><td><code>/blog/deep/level-3.html</code> → <code>level-4.html</code></td><td>The chain is followed down to <code>maxDepth</code>.</td></tr>
+      <tr><td>Backoff and retry</td><td><code>/rate-limited</code>, <code>/flaky</code></td><td>429 (<code>Retry-After</code>) and 503 are retried until the page is fetched and indexed.</td></tr>
+      <tr><td>Deduplication</td><td><code>/canonical-dup.html</code>, <code>/dup-content.html</code></td><td>Canonical and identical-content pages are not indexed twice.</td></tr>
+      <tr><td>Grounded search</td><td><code>/products/ridgeback-45.html</code></td><td>Ranks first for "ridgeback weight".</td></tr>
+      <tr><td>Corpus opt-out independent of search</td><td><code>User-agent: CairnCorpus</code> / <code>Disallow: /</code></td><td>On a fresh fixture, a corpus-role crawl requests only <code>/robots.txt</code> and writes nothing.</td></tr>
+      <tr><td>Web Bot Auth</td><td><code>/.well-known/http-message-signatures-directory</code>, <code>/signed-only</code></td><td>With a server on port 0: the key directory is published at the <code>Signature-Agent</code> URL; an unsigned request to <code>/signed-only</code> gets 401; a user fetch (directly and via <code>POST /api/fetch</code>) verifies with <code>verified: true</code>.</td></tr>
+      <tr><td>User fetches respect robots by default</td><td><code>/private/secret.html</code></td><td>A <code>Cairn-User</code> fetch is refused and the page is not requested.</td></tr>
+      <tr><td>Cited answers</td><td>index</td><td>A quick answer via the fake Claude CLI answers from indexed passages with citations.</td></tr>
+    </table></div>
+
+    <h2 id="run">How to run</h2>
+    <pre class="code"><code># Full offline suite (unit + integration + e2e), 4 files in parallel
+$ npm test
+# = node --test --test-concurrency=4 test/*.test.js
+
+# One area while developing
+$ node --test test/robots.test.js
+$ node --test --test-name-pattern="longest match" test/robots.test.js
+
+# Opt-in live run against the real Claude CLI (billed, a few cents)
+$ npm run test:live
+# = CAIRN_LIVE_CLAUDE=1 node --test test/live-claude.test.js
+# choose a cheaper model and/or a specific CLI binary:
+$ CAIRN_MODEL=haiku npm run test:live
+$ CAIRN_CLAUDE_BIN=/opt/homebrew/bin/claude npm run test:live
+
+# Manual end-to-end showcase: fixture → crawl → robots → search → ask
+$ node bin/cairn.js demo              # uses Claude if available
+$ node bin/cairn.js demo --no-claude  # deterministic, offline, free
+
+# Explore the fixture by hand
+$ node bin/cairn.js fixture --port 8788
+$ node bin/cairn.js crawl http://127.0.0.1:8788/ --max-depth 5 --data-dir /tmp/cairn-play
+$ node bin/cairn.js audit --limit 40 --data-dir /tmp/cairn-play</code></pre>
+    <div class="table-scroll"><table>
+      <tr><th>Command</th><th>Needs</th><th>Typical time</th></tr>
+      <tr><td><code>npm test</code></td><td>Node 20+ only — no network beyond loopback, no Claude</td><td>A few seconds (about 6 s for 399 tests on a development laptop, 4 files in parallel); the slowest cases wait on real timeouts, Retry-After and the fixture's <code>/slow</code> route.</td></tr>
+      <tr><td><code>npm run test:live</code></td><td>Node 20+, a logged-in <code>claude</code> CLI</td><td>Typically 1–4 minutes (each case may take up to 240 s; deep research makes several tool calls). Costs cents.</td></tr>
+      <tr><td><code>node bin/cairn.js demo --no-claude</code></td><td>Node 20+</td><td>About 12 s (measured: 25 pages fetched, 19 indexed, 4 blocked by robots); uses a temporary data directory that is deleted afterwards.</td></tr>
+      <tr><td>Manual crawl at default politeness</td><td>fixture running</td><td>About 35 s for the same 25 pages — 1 s between requests to one host plus backoff on 429/503.</td></tr>
+    </table></div>
+
+    <h2 id="fakes">Fakes, isolation &amp; determinism</h2>
+    <ul>
+      <li><strong>No shared state.</strong> Every test that needs storage creates its own <code>fs.mkdtempSync(os.tmpdir() + '/cairn-')</code> data directory; nothing writes to the project's <code>data/</code>.</li>
+      <li><strong>Ephemeral ports.</strong> Servers (fixture, API, throwaway test servers) listen on <code>127.0.0.1:0</code>, so parallel test files never collide.</li>
+      <li><strong>Injected time.</strong> <code>HostScheduler</code> and <code>RobotsCache</code> accept <code>now</code>/<code>sleep</code> functions, so backoff and TTL tests do not sleep for real.</li>
+      <li><strong>Fast politeness in e2e.</strong> The runtime is created with <code>politeness: {minDelayMs: 0, backoffBaseMs: 10, maxBackoffMs: 100}</code> and a 5 s fetch timeout; the tests still verify ordering, retries and Retry-After handling (the fixture's <code>Retry-After: 1</code> still wins, because Retry-After beats computed backoff).</li>
+      <li><strong>Fake Claude.</strong> <code>CAIRN_CLAUDE_BIN=test/fixtures/fake-claude.js</code> (or <code>agent.claudeBin</code> in the runtime overrides) replaces the real CLI with a script that speaks the same stream-json protocol; the agent tests also use nonexistent binaries to exercise the fallbacks.</li>
+      <li><strong>Fresh fixtures where state matters.</strong> The one-shot 429/503 routes and the request log are per fixture instance, so the corpus-role check uses its own fixture (or <code>reset({rearm: true})</code>).</li>
+      <li><strong>Clean shutdown.</strong> Each test closes its runtime, servers and SSE streams in <code>after()</code> hooks so <code>node --test</code> exits without dangling handles.</li>
+    </ul>
+
+    <h2 id="results">Latest results</h2><div id="results-body">
+    <p><strong>Final integration run, 2026-09-30.</strong> Environment: macOS 26.6.2 (Apple silicon, arm64), Node 20.20.0, Claude CLI 2.1.286 (Claude Code, Enterprise login), Swift 6.4. No npm dependencies. Servers for these checks used throwaway <code>mkdtemp</code> data directories under <code>/private/tmp</code> and ports that were not already in use.</p>
+    <div class="cards">
+      <div class="card"><h3><span class="badge good">npm test</span> 397 / 399 pass</h3><p>399 tests in 23 suites: 397 passed, <strong>0 failed</strong>, 0 cancelled and 2 skipped (both live-only). The run took 6.0 s with <code>--test-concurrency=4</code>.</p></div>
+      <div class="card"><h3><span class="badge good">Live assistant</span> 7 / 7 scenarios</h3><p>Plus a settings-isolation safety check and three UI checks in a real browser, all against the real Claude CLI. Total spend was about $0.53.</p></div>
+      <div class="card"><h3><span class="badge good">Live engine</span> 2 / 2</h3><p>The quick answer and the deep-research run over the fixture both used Claude, stated 1.2 kg and 60 days, and cited fixture URLs.</p></div>
+      <div class="card"><h3><span class="badge good">Desktop app</span> 37 / 37 self-checks</h3><p><code>bash desktop/build.sh</code> compiles with 0 errors and 0 warnings, passes the built-in self-test, and the bundle passes <code>codesign --verify --deep --strict</code>.</p></div>
+    </div>
+
+    <h3>Per-file results</h3>
+    <p>Each file was run on its own with <code>node --test test/&lt;file&gt;</code>, so the durations are wall-clock times for single files.</p>
+    <div class="table-scroll"><table>
+      <tr><th>File</th><th>Layer</th><th>Tests</th><th>Pass</th><th>Fail</th><th>Skipped</th><th>Time</th></tr>
+      <tr><td><code>test/robots.test.js</code></td><td>Unit</td><td>51</td><td>51</td><td>0</td><td>0</td><td>0.26 s</td></tr>
+      <tr><td><code>test/ratelimit.test.js</code></td><td>Unit</td><td>15</td><td>15</td><td>0</td><td>0</td><td>0.55 s</td></tr>
+      <tr><td><code>test/signing.test.js</code></td><td>Unit</td><td>11</td><td>11</td><td>0</td><td>0</td><td>0.06 s</td></tr>
+      <tr><td><code>test/extract.test.js</code></td><td>Unit</td><td>28</td><td>28</td><td>0</td><td>0</td><td>0.70 s</td></tr>
+      <tr><td><code>test/index.test.js</code></td><td>Unit</td><td>17</td><td>17</td><td>0</td><td>0</td><td>0.71 s</td></tr>
+      <tr><td><code>test/scheduler.test.js</code></td><td>Unit</td><td>59</td><td>59</td><td>0</td><td>0</td><td>3.12 s</td></tr>
+      <tr><td><code>test/sse.test.js</code></td><td>Unit</td><td>2</td><td>2</td><td>0</td><td>0</td><td>0.06 s</td></tr>
+      <tr><td><code>test/fetcher.test.js</code></td><td>Integration</td><td>32</td><td>32</td><td>0</td><td>0</td><td>2.88 s</td></tr>
+      <tr><td><code>test/fetch-index.test.js</code></td><td>Integration</td><td>8</td><td>8</td><td>0</td><td>0</td><td>0.11 s</td></tr>
+      <tr><td><code>test/crawler.test.js</code></td><td>Integration</td><td>25</td><td>25</td><td>0</td><td>0</td><td>0.28 s</td></tr>
+      <tr><td><code>test/agent.test.js</code></td><td>Integration</td><td>16</td><td>16</td><td>0</td><td>0</td><td>0.98 s</td></tr>
+      <tr><td><code>test/mcp.test.js</code></td><td>Integration</td><td>15</td><td>15</td><td>0</td><td>0</td><td>0.24 s</td></tr>
+      <tr><td><code>test/server.test.js</code></td><td>Integration</td><td>30</td><td>30</td><td>0</td><td>0</td><td>0.65 s</td></tr>
+      <tr><td><code>test/assistant-core.test.js</code></td><td>Integration</td><td>19</td><td>19</td><td>0</td><td>0</td><td>1.35 s</td></tr>
+      <tr><td><code>test/assistant-tools.test.js</code></td><td>Integration</td><td>26</td><td>24</td><td>0</td><td>2 <span class="badge">live-only</span></td><td>2.19 s</td></tr>
+      <tr><td><code>test/assistant-routes.test.js</code></td><td>Integration</td><td>17</td><td>17</td><td>0</td><td>0</td><td>2.82 s</td></tr>
+      <tr><td><code>test/server-assistant.test.js</code></td><td>Integration</td><td>9</td><td>9</td><td>0</td><td>0</td><td>1.12 s</td></tr>
+      <tr><td><code>test/e2e.test.js</code></td><td>End-to-end</td><td>19</td><td>19</td><td>0</td><td>0</td><td>1.23 s</td></tr>
+      <tr><td><code>test/live-claude.test.js</code></td><td>Live</td><td>0 (2 when enabled)</td><td>—</td><td>0</td><td>skipped suite</td><td>0.04 s</td></tr>
+      <tr><th>Total (19 files)</th><th></th><th>399</th><th>397</th><th>0</th><th>2</th><th>6.0 s with <code>npm test</code></th></tr>
+    </table></div>
+    <p>The two skipped tests are <code>LIVE: real macOS notification</code> (needs <code>CAIRN_LIVE_MAC=1</code>) and <code>LIVE: claude --permission-prompt-tool calls approval_prompt</code> (needs <code>CAIRN_LIVE_CLAUDE=1</code>). <code>test/live-claude.test.js</code> is a suite that is skipped unless <code>CAIRN_LIVE_CLAUDE=1</code> is set, so it adds no tests to the default count.</p>
+
+    <h3>CLI and server checks</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Check</th><th>Result</th><th>Evidence</th></tr>
+      <tr><td><code>node bin/cairn.js doctor</code></td><td><span class="badge good">pass</span></td><td>Node, data directory, signing key, Claude CLI 2.1.286, web UI, assistant UI (<code>web/bubble.html</code>), docs and <code>desktop/build/Cairn.app</code> all reported ok. Ending: "Cairn is ready." The only warning was that port 8787 is in use, because the user's own server was running there.</td></tr>
+      <tr><td><code>node bin/cairn.js help</code></td><td><span class="badge good">pass</span></td><td>Listed the engine commands plus the assistant commands <code>chat</code>, <code>remind</code>, <code>tasks</code>, <code>approvals</code>, <code>shopping</code>, <code>assistant</code> and <code>desktop</code>.</td></tr>
+      <tr><td><code>node bin/cairn.js demo --data-dir &lt;tmp&gt;</code></td><td><span class="badge good">pass</span></td><td>Of 29 URLs discovered, 25 were fetched and 19 indexed; 2 were noindex, 3 duplicates and 4 blocked by robots, with 0 errors. The fixture received 32 requests for 29 paths and none of them was disallowed. Claude (sonnet) answered "1.2 kg … 60 days" with citations [1] and [3] in 3.4 s for $0.0122.</td></tr>
+      <tr><td><code>serve --port 8799</code> on a temporary data directory with the fake Claude CLI</td><td><span class="badge good">pass</span></td><td>These routes returned 200: <code>/api/health</code> (including <code>ui: {assistant: true, avatarGallery: true}</code>), <code>/api/assistant/health</code> (scheduler running), <code>/assistant</code>, <code>/web/avatars/gallery.html</code>, <code>/web/avatars/index.json</code>, <code>/docs/</code>, <code>/bot</code> and <code>/</code>. <code>/assistant/</code> returned 301. The banner showed the Assistant URL, the scheduler status and the desktop hint.</td></tr>
+      <tr><td>Assistant CLI against that server</td><td><span class="badge good">pass</span></td><td><code>chat</code> streamed the run and conversation ids, then status, text and "done · $0.0012", followed by a <code>--conversation</code> hint. <code>remind "in 10 minutes stretch"</code> scheduled a one-time reminder, and <code>tasks</code> listed it before <code>tasks cancel &lt;id&gt;</code> cancelled it. <code>approvals</code> and <code>shopping</code> printed their empty states. With no server on the port, <code>tasks</code> printed "Cairn is not running at … Start it with …" and exited with code 1.</td></tr>
+    </table></div>
+
+    <h3>Live assistant scenarios (real Claude CLI)</h3>
+    <p>These ran on a fresh server on port 8795 with the final code and a temporary data directory. Every run used <code>--setting-sources ""</code> (settings isolation) and the default <code>~/CairnWorkspace</code> working directory. The model was haiku except in scenario 2. Times were measured by the test driver.</p>
+    <div class="table-scroll"><table>
+      <tr><th>#</th><th>Scenario</th><th>Result</th><th>Seconds</th><th>Cost (USD)</th><th>Evidence</th></tr>
+      <tr><td>A</td><td>Safety: <code>git fetch --dry-run</code> (auto-allowed in the user's personal <code>~/.claude/settings.json</code>)</td><td><span class="badge good">pass</span></td><td>9.1</td><td>0.0231</td><td>An approval card still appeared, so the personal allow rule did not bypass Cairn's approval. Denying it stopped the run.</td></tr>
+      <tr><td>1</td><td>"Remind me in 1 minute to stretch"</td><td><span class="badge good">pass</span></td><td>about 60 to the event (checked at 123.7)</td><td>0.0288</td><td>The task was created and the <code>reminder</code> event arrived 10 ms after its due time. A macOS notification and a bubble banner both appeared.</td></tr>
+      <tr><td>2</td><td>Web search: the capital of Australia (sonnet)</td><td><span class="badge good">pass</span></td><td>11.3</td><td>0.0913</td><td>"The capital of Australia is Canberra.", with a Britannica source link.</td></tr>
+      <tr><td>3a</td><td>Approval allow (file write)</td><td><span class="badge good">pass</span></td><td>8.4</td><td>0.0229</td><td>A Write approval was requested and allowed. The run finished and the file in <code>~/CairnWorkspace</code> contained "hello".</td></tr>
+      <tr><td>3b</td><td>Approval deny (different file)</td><td><span class="badge good">pass</span></td><td>11.3</td><td>0.0231</td><td>The run finished with "The Write action was denied" and no file was created.</td></tr>
+      <tr><td>4</td><td>Two chats in different conversations at once</td><td><span class="badge good">pass</span></td><td>32.6</td><td>0.0293</td><td><code>/runs</code> showed both running at the same time, and both finished. UI runs were going on in parallel during this scenario.</td></tr>
+      <tr><td>5</td><td>Shopping: 45 L backpack under $200</td><td><span class="badge good">pass</span></td><td>35.9</td><td>0.1186</td><td>A Markdown comparison table (Product, Store, Price, Rating) and one shopping-list item with a store link. Nothing was bought.</td></tr>
+      <tr><td>6</td><td>Memory across turns (favourite colour teal)</td><td><span class="badge good">pass</span></td><td>17.6</td><td>0.0428</td><td>"Your favorite color is teal.", from the same Claude session via <code>--resume</code>.</td></tr>
+      <tr><td>7</td><td>Scheduled agent task (fires at now + 70 s)</td><td><span class="badge good">pass</span></td><td>about 70 to fire (checked at 115.5)</td><td>0.0197</td><td>A <code>task_result</code> event arrived with a fact about mountains.</td></tr>
+      <tr><td>UI</td><td>"Remind me in 5 minutes to drink water" typed in the composer</td><td><span class="badge good">pass</span></td><td>6</td><td>0.028</td><td>The reply streamed in with a "Scheduled 'Drink water'" chip. The task appeared in the Tasks tab and fired on time.</td></tr>
+      <tr><td>UI</td><td>File-write approval, Approve clicked on the card</td><td><span class="badge good">pass</span></td><td>21</td><td>0.036</td><td>The card showed the path, the details and a countdown. The file was created and the card read "Approved — continuing".</td></tr>
+      <tr><td>UI</td><td>Activity tab</td><td><span class="badge good">pass</span></td><td>–</td><td>–</td><td>It listed every run with a state chip, elapsed time, cost and last step, and the browser console had no errors.</td></tr>
+    </table></div>
+    <p>The session cost about $0.53 in total: $0.4637 for the 13 scripted runs and about $0.06 for the UI runs. Three cosmetic bubble-UI defects found during this pass were fixed in <code>web/bubble.js</code> and <code>web/bubble.css</code>: stacked alert banners now collapse to the newest two, the chat stays pinned to the bottom when a banner appears, and the Activity tab no longer shows flattened table separators.</p>
+
+    <h3>Live engine results (real Claude CLI)</h3>
+    <p>Command: <code>npm run test:live</code> (<code>CAIRN_LIVE_CLAUDE=1 node --test test/live-claude.test.js</code>). Question: "How much does the Ridgeback 45 weigh and what is the return window?" Both tests passed in 12.8 s.</p>
+    <div class="table-scroll"><table>
+      <tr><th>Mode</th><th>Model</th><th>Result</th><th>Time</th><th>Cost (USD)</th><th>Evidence</th></tr>
+      <tr><td>Quick answer</td><td>sonnet</td><td><span class="badge good">pass</span></td><td>3.3 s</td><td>0.0124</td><td>"weighs 1.2 kg (2.6 lb) … or 1.05 kg without the lid [1] … 60-day return window [1][3]". Citations: <code>/products/ridgeback-45.html</code> and <code>/faq.html</code>.</td></tr>
+      <tr><td>Deep research (Claude CLI + Cairn MCP server)</td><td>sonnet</td><td><span class="badge good">pass</span></td><td>8.4 s</td><td>0.0230</td><td>The tool steps were <code>search_index</code>, <code>search_index</code>, <code>fetch_page</code> and <code>fetch_page</code>. The answer gave 1.2 kg / 1.05 kg and 60 days, with citations [1] (product page) and [4] (FAQ).</td></tr>
+      <tr><td><code>demo</code> (final run)</td><td>sonnet</td><td><span class="badge good">pass</span></td><td>3.4 s</td><td>0.0122</td><td>The same facts were cited from the fixture, as described in the CLI checks above.</td></tr>
+    </table></div>
+
+    <h3>Desktop app build and self-test</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Step</th><th>Result</th><th>Evidence</th></tr>
+      <tr><td><code>bash desktop/build.sh</code></td><td><span class="badge good">pass</span></td><td>Compiled <code>CairnBubble.swift</code> with Swift 6.4 for arm64, minimum macOS 12.0, with 0 errors and 0 warnings. It copied 5 avatar files (aurora, dots, buddy, plus the gallery and <code>index.json</code>) into <code>Contents/Resources/avatars</code> and validated <code>index.json</code>.</td></tr>
+      <tr><td>Built-in self-test</td><td><span class="badge good">37 / 37</span></td><td>The checks covered:
+        <ul>
+          <li>the menus in the offline and busy states (including <em>Show in Dock</em>)</li>
+          <li>the activation policy following <code>CairnShowInDock</code> (unset or YES → regular Dock app, NO → accessory) and <code>LSUIElement</code> being off in the bundle</li>
+          <li>the menu bar: Edit › Undo ⌘Z, Redo ⇧⌘Z, Cut ⌘X, Copy ⌘C, Paste ⌘V and Select All ⌘A with first-responder targets, plus the App, Window and Help menus</li>
+          <li>the Dock menu (Open Chat, New Chat, Open Dashboard, Open Docs, the "2 tasks running · 3 approvals" status line, Start at Login) and the Dock badge</li>
+          <li>the reopen handler (a Dock click) opening the chat panel and focusing the composer, when it hides the chat instead, and Dock › New Chat calling <code>cairnBubble.newChat()</code></li>
+          <li>health parsing</li>
+          <li>the native fallback ring and badge</li>
+          <li>the 88×88 window</li>
+          <li>the overlay sitting above the avatar web view and owning mouse events</li>
+          <li>all 7 state-mapping cases (offline, idle, listening, working, attention and attention expiry)</li>
+          <li>avatar styles loading from the app bundle</li>
+          <li>the Avatar submenu</li>
+          <li>header drag with buttons passing clicks through</li>
+          <li>each of the three avatars loading offscreen and accepting every state</li>
+          <li>the default top-right position with a 16 px inset</li>
+          <li>chat panel placement and flipping</li>
+          <li>clamping when off-screen</li>
+          <li>AppleScript escaping</li>
+        </ul></td></tr>
+      <tr><td>Code signature</td><td><span class="badge good">pass</span></td><td><code>codesign --verify --deep --strict desktop/build/Cairn.app</code> passed. The bundle is ad-hoc signed with identifier <code>com.cairn.bubble</code>.</td></tr>
+      <tr><td>Launch (desktop pass)</td><td><span class="badge good">pass</span></td><td>The app ran as a Dock app (<code>lsappinfo</code> type <code>Foreground</code>, pinned at <code>file:///Applications/Cairn.app/</code> in <code>com.apple.dock persistent-apps</code>) and logged "avatar 'aurora' loaded" while connected to the 8787 server. <code>open -a Cairn</code> on the running app (the same reopen event as a Dock click) logged "Dock: reopen → open chat", and a second one, with Cairn frontmost and the chat focused, logged "Dock: reopen → hide chat". When that server restarted, the avatar showed offline for about 13 s and then reconnected without starting or stopping any server. The log also showed "header drag strip 52 px, 4 interactive rect(s) pass through".</td></tr>
+      <tr><td>Not automated</td><td><span class="badge warn">manual</span></td><td>Real mouse clicks, drags, hover and opening the chat panel from the bubble; clicks on the Dock icon and its menu; typing and ⌘C / ⌘V in the panel; the <em>Show in Dock</em> toggle switching live. Posting synthetic mouse and key events needs Accessibility permission, so these paths are covered only by the self-test and the launch log.</td></tr>
+    </table></div>
+    </div>
+
+    <h3 id="evidence">Evidence: live-test screenshots</h3>
+    <style>
+      .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 14px 0 22px; }
+      .shots figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+      .shots figure > a { display: block; }
+      .shots figure img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border); }
+      .shots figcaption { color: var(--muted); font-size: 13.5px; line-height: 1.45; margin-top: 8px; }
+      .shots figcaption strong { color: var(--text); }
+    </style>
+    <p>These screenshots were taken during the live pass above. The chat-panel captures come from a Playwright browser on <code>web/bubble.html</code> at 400×620, and the bubble capture comes from the running desktop app. Each caption names the row it supports in the live assistant scenarios and desktop app tables under <a href="#results">Latest results</a>. More screenshots, with descriptions of each UI element, are on <a href="assistant.html#screenshots">Desktop assistant</a> and <a href="desktop.html#screenshots">Floating bubble app</a>.</p>
+    <div class="shots">
+      <figure><a href="assets/screenshots/chat-streaming.png"><img loading="lazy" src="assets/screenshots/chat-streaming.png" width="400" height="620" alt="Chat reply with a Scheduled Drink water chip"></a>
+        <figcaption><strong>UI · reminder typed in the composer.</strong> The reply streamed in with the <em>Scheduled "Drink water"</em> chip, 6 s, $0.028.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-tasks.png"><img loading="lazy" src="assets/screenshots/chat-tasks.png" width="400" height="620" alt="Tasks tab showing the Drink water reminder and Daily fact task"></a>
+        <figcaption><strong>UI · reminder in the Tasks tab</strong>, and scenarios 1 and 7. <em>Drink water</em> is listed as due in 4 min, the <em>Daily fact</em> agent task is scheduled, and the <em>Stretch</em> reminder has fired.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-approval-pending.png"><img loading="lazy" src="assets/screenshots/chat-approval-pending.png" width="400" height="620" alt="Approval card for a file write with an auto-deny countdown"></a>
+        <figcaption><strong>UI · file-write approval, before.</strong> The card shows the details, Approve / Deny / Always allow and the auto-deny countdown.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-approval-approved.png"><img loading="lazy" src="assets/screenshots/chat-approval-approved.png" width="400" height="620" alt="Approval card reading Approved, continuing"></a>
+        <figcaption><strong>UI · file-write approval, after.</strong> The card shows the path in <code>~/CairnWorkspace</code> and <em>Approved — continuing</em>. The shopping run (scenario 5) finishes in the toast.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-activity.png"><img loading="lazy" src="assets/screenshots/chat-activity.png" width="400" height="620" alt="Activity tab listing finished runs with time and cost"></a>
+        <figcaption><strong>UI · Activity tab.</strong> Each run has a state chip, elapsed time, cost and its last step. The browser console had no errors.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-alerts-compact.png"><img loading="lazy" src="assets/screenshots/chat-alerts-compact.png" width="400" height="620" alt="Two reminder alerts with Show 1 more alert and Dismiss all"></a>
+        <figcaption><strong>Banner fix, verified.</strong> Stacked alerts collapse to the newest two, with <em>Show 1 more alert</em> and <em>Dismiss all</em>, and the chat stays pinned to the bottom.</figcaption></figure>
+      <figure><a href="assets/screenshots/desktop-bubble-buddy-offline.png"><img loading="lazy" src="assets/screenshots/desktop-bubble-buddy-offline.png" width="260" height="260" alt="Buddy avatar in the offline state while the server restarted"></a>
+        <figcaption><strong>Launch (desktop pass) · offline while the server restarted.</strong> This was captured with the Buddy style during the 8787 restart, so it shows the <code>offline</code> state. The app reconnected without starting or stopping any server.</figcaption></figure>
+    </div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

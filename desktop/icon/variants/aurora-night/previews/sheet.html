@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Aurora Night previews</title>
+<style>
+  html,body{margin:0;background:#8a8f99;font:13px -apple-system,system-ui,sans-serif;color:#222}
+  .wrap{width:1400px;height:1000px;position:relative;overflow:hidden}
+  .hero{position:absolute;left:24px;top:24px;width:560px;height:560px;border-radius:18px;
+        background:linear-gradient(135deg,#f4f4f6 0 50%,#1e1e1e 50% 100%);display:flex;align-items:center;justify-content:center}
+  .strip{position:absolute;left:608px;width:768px;height:225px;border-radius:22px;display:flex;align-items:center;gap:22px;padding:0 24px;box-sizing:border-box}
+  .light{top:24px;background:#ececec}
+  .dark{top:269px;background:#1e1e1e}
+  .strip.small{height:84px}
+  .light.small{top:514px}.dark.small{top:614px}
+  .n{border-radius:23%;flex:none}
+  .n1{background:linear-gradient(180deg,#fdfdfd,#d9dbe0);box-shadow:0 2px 4px rgba(0,0,0,.25)}
+  .n2{background:linear-gradient(180deg,#3fb4ff,#0a6cf0);box-shadow:0 2px 4px rgba(0,0,0,.25)}
+  .n3{background:linear-gradient(180deg,#5a5d66,#26282d);box-shadow:0 2px 4px rgba(0,0,0,.25)}
+  .n4{background:linear-gradient(180deg,#ffd35a,#ff9f0a);box-shadow:0 2px 4px rgba(0,0,0,.25)}
+  img{display:block;flex:none}
+  .row{position:absolute;left:24px;top:720px;width:1352px;height:256px;border-radius:22px;display:flex}
+  .row div{flex:1;display:flex;align-items:center;justify-content:center;gap:18px}
+  .rl{background:#ececec;border-radius:22px 0 0 22px}.rd{background:#1e1e1e;border-radius:0 22px 22px 0}
+</style></head><body><div class="wrap">
+  <div class="hero"><img src="icon-512.png" width="512" height="512"></div>
+  <div class="strip light">
+    <div class="n n1" style="width:104px;height:104px;margin:12px"></div>
+    <img src="icon-128.png" width="128" height="128">
+    <div class="n n2" style="width:104px;height:104px;margin:12px"></div>
+    <img src="icon-64.png" width="64" height="64">
+    <div class="n n3" style="width:52px;height:52px;margin:6px"></div>
+    <img src="icon-small-32.png" width="32" height="32">
+    <img src="icon-small-16.png" width="16" height="16">
+  </div>
+  <div class="strip dark">
+    <div class="n n3" style="width:104px;height:104px;margin:12px"></div>
+    <img src="icon-128.png" width="128" height="128">
+    <div class="n n4" style="width:104px;height:104px;margin:12px"></div>
+    <img src="icon-64.png" width="64" height="64">
+    <div class="n n1" style="width:52px;height:52px;margin:6px"></div>
+    <img src="icon-small-32.png" width="32" height="32">
+    <img src="icon-small-16.png" width="16" height="16">
+  </div>
+  <div class="strip light small">
+    <div class="n n2" style="width:26px;height:26px;margin:3px"></div><img src="icon-small-32.png" width="32" height="32">
+    <div class="n n1" style="width:26px;height:26px;margin:3px"></div><img src="icon-small-16.png" width="16" height="16">
+    <div class="n n4" style="width:13px;height:13px;margin:1.5px"></div>
+    <span style="margin-left:30px">32 / 16 (simplified master) on light</span>
+  </div>
+  <div class="strip dark small">
+    <div class="n n3" style="width:26px;height:26px;margin:3px"></div><img src="icon-small-32.png" width="32" height="32">
+    <div class="n n2" style="width:26px;height:26px;margin:3px"></div><img src="icon-small-16.png" width="16" height="16">
+    <div class="n n1" style="width:13px;height:13px;margin:1.5px"></div>
+    <span style="margin-left:30px;color:#ccc">32 / 16 (simplified master) on dark</span>
+  </div>
+  <div class="row">
+    <div class="rl"><img src="icon-128.png" width="128" height="128"><img src="icon-64.png" width="64" height="64"><img src="icon-32.png" width="32" height="32"><img src="icon-16.png" width="16" height="16"><span style="width:30px"></span><img src="icon-small-32.png" width="32" height="32"><img src="icon-small-16.png" width="16" height="16"></div>
+    <div class="rd"><img src="icon-128.png" width="128" height="128"><img src="icon-64.png" width="64" height="64"><img src="icon-32.png" width="32" height="32"><img src="icon-16.png" width="16" height="16"><span style="width:30px"></span><img src="icon-small-32.png" width="32" height="32"><img src="icon-small-16.png" width="16" height="16"></div>
+  </div>
+</div></body></html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cairn icon preview: Liquid Glass</title>
+<style>
+  body { margin: 0; width: 1400px; font: 500 13px -apple-system, system-ui, sans-serif; background: #f6f6f8; color: #333; }
+  .strip { display: flex; align-items: flex-end; gap: 28px; padding: 28px 36px; }
+  .light { background: #ececec; color: #555; }
+  .dark { background: #1e1e1e; color: #aaa; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .cell img { display: block; image-rendering: auto; }
+  .dock { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 22px; }
+  .light .dock { background: rgba(255,255,255,.55); box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08); }
+  .dark .dock { background: rgba(60,60,64,.7); box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 8px 24px rgba(0,0,0,.4); }
+  .nb { width: 64px; height: 64px; position: relative; }
+  .nb i { position: absolute; inset: 6.25px; border-radius: 14.5px; box-shadow: 0 1.5px 3px rgba(0,0,0,.25); }
+  .n1 i { background: linear-gradient(#5ac8fa, #007aff); }
+  .n2 i { background: linear-gradient(#ffffff, #e6e6e6); }
+  .n3 i { background: linear-gradient(#3a3a3c, #1c1c1e); }
+  .n4 i { background: linear-gradient(#ffd60a, #ff9f0a); }
+  .small .nb { width: 32px; height: 32px; } .small .nb i { inset: 3px; border-radius: 7px; }
+  .tiny .nb { width: 16px; height: 16px; } .tiny .nb i { inset: 1.5px; border-radius: 3.5px; }
+  .gap { flex: 1; }
+</style></head><body>
+<div class="strip light">
+  <div class="cell"><img src="icon-512.png" width="512" height="512"><span>512</span></div>
+  <div class="cell"><img src="icon-128.png" width="128" height="128"><span>128</span></div>
+  <div class="cell"><img src="icon-64.png" width="64" height="64"><span>64</span></div>
+  <div class="cell"><img src="icon-32.png" width="32" height="32"><span>32</span></div>
+  <div class="cell"><img src="icon-16.png" width="16" height="16"><span>16</span></div>
+  <div class="gap"></div>
+  <div class="cell"><div class="dock">
+    <div class="nb n1"><i></i></div><div class="nb n2"><i></i></div><img src="icon-64.png" width="64" height="64"><div class="nb n3"><i></i></div><div class="nb n4"><i></i></div>
+  </div><div class="dock small">
+    <div class="nb n1"><i></i></div><div class="nb n2"><i></i></div><img src="icon-32.png" width="32" height="32"><div class="nb n3"><i></i></div>
+    <div class="tiny" style="display:flex;gap:6px;margin-left:10px"><div class="nb n1"><i></i></div><img src="icon-16.png" width="16" height="16"><div class="nb n3"><i></i></div></div>
+  </div><span>Dock (light)</span></div>
+</div>
+<div class="strip dark">
+  <div class="cell"><img src="icon-512.png" width="512" height="512"><span>512</span></div>
+  <div class="cell"><img src="icon-128.png" width="128" height="128"><span>128</span></div>
+  <div class="cell"><img src="icon-64.png" width="64" height="64"><span>64</span></div>
+  <div class="cell"><img src="icon-32.png" width="32" height="32"><span>32</span></div>
+  <div class="cell"><img src="icon-16.png" width="16" height="16"><span>16</span></div>
+  <div class="gap"></div>
+  <div class="cell"><div class="dock">
+    <div class="nb n1"><i></i></div><div class="nb n2"><i></i></div><img src="icon-64.png" width="64" height="64"><div class="nb n3"><i></i></div><div class="nb n4"><i></i></div>
+  </div><div class="dock small">
+    <div class="nb n1"><i></i></div><div class="nb n2"><i></i></div><img src="icon-32.png" width="32" height="32"><div class="nb n3"><i></i></div>
+    <div class="tiny" style="display:flex;gap:6px;margin-left:10px"><div class="nb n1"><i></i></div><img src="icon-16.png" width="16" height="16"><div class="nb n3"><i></i></div></div>
+  </div><span>Dock (dark)</span></div>
+</div>
+</body></html>

@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Desktop assistant — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Desktop assistant</h1>
+    <p class="lead">Cairn Assistant is a personal assistant that runs on your Mac. It schedules reminders and recurring tasks, searches and researches, shops for you (research, compare, add to cart, but never pay), and does computer tasks such as file handling, terminal commands, Mac apps and browser automation. It is always on: every request runs in the background, so you can close the chat and hand off another task, and it asks for your approval before any risky action. The brain is the Claude CLI (<code>claude -p</code>) using your existing login. You reach it through a floating bubble that stays on top of your desktop.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#what">What it does</a> (<a href="#screenshots">screenshots</a>)</li>
+      <li><a href="#always-on">Always-on and background runs</a></li>
+      <li><a href="#research">Researched feature catalogue</a></li>
+      <li><a href="#compare">Comparison: ChatGPT, Grok and Cairn</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#chat-turn">A chat turn, end to end</a></li>
+      <li><a href="#tools">Tool catalogue</a></li>
+      <li><a href="#safety">Safety model and approval policy</a></li>
+      <li><a href="#reminders">Reminders and recurring tasks</a></li>
+      <li><a href="#shopping">Shopping with checkout hand-off</a></li>
+      <li><a href="#computer">Computer tasks</a></li>
+      <li><a href="#memory">Conversation memory (<code>--resume</code>)</a></li>
+      <li><a href="#events">Events and notifications</a></li>
+      <li><a href="#settings">Settings</a></li>
+      <li><a href="#api">HTTP API quick reference</a></li>
+      <li><a href="#prompts">Example prompts</a></li>
+      <li><a href="#limits">Limits and honest differences</a></li>
+      <li><a href="#sources">Research sources</a></li>
+    </ol></div>
+
+    <!-- ============================================================== -->
+    <h2 id="what">1. What it does</h2>
+    <p>Cairn started as a web retrieval and answer engine (see <a href="architecture.html">Architecture</a>). The assistant layer adds a personal-assistant experience on top of it, modelled on ChatGPT Agent, ChatGPT Tasks and Grok. Everything runs on your Mac. The Cairn server listens only on <code>127.0.0.1:8787</code>. Claude runs as a local CLI subprocess and is given a curated set of tools, and each tool call is either auto-approved (read-only or low-risk) or routed to you for approval.</p>
+    <div class="cards">
+      <div class="card"><h3>⏰ Reminders &amp; recurring tasks</h3><p>"Remind me at 5pm", "every weekday at 8am brief me on the news". Cairn uses its own scheduler with macOS notifications. It can also write to <strong>Reminders.app</strong> and <strong>Calendar.app</strong> on request. Files: <code>src/assistant/scheduler.js</code>, <code>when.js</code>, <code>macos.js</code>.</p></div>
+      <div class="card"><h3>🔎 Search &amp; research</h3><p>Live web search and page reading (Claude <code>WebSearch</code> / <code>WebFetch</code>), plus Cairn's own robots-respecting index and fetcher through the <code>cairn</code> MCP server. It runs multi-step research and cites its sources.</p></div>
+      <div class="card"><h3>🛒 Shopping</h3><p>It asks clarifying questions, researches, and gives you a comparison table (product, store, price, rating, link). It keeps a shopping list and can add items to a cart with your approval. <strong>It never enters payment details or places orders.</strong> Checkout is handed back to you. File: <code>src/assistant/shopping.js</code>.</p></div>
+      <div class="card"><h3>💻 Computer tasks</h3><p>It reads and searches files without asking. Shell commands, file writes and edits, and browser clicks or typing each need your approval. It can open apps and URLs and use the clipboard. It can drive a visible browser with the optional Playwright MCP server.</p></div>
+      <div class="card"><h3>🌙 Always on, in the background</h3><p>Every request is a background run that keeps going after you close the panel. Up to 3 runs execute at once and the rest wait in a queue. An <strong>Activity</strong> tab shows live progress, and macOS notifies you when a run finishes or needs you.</p></div>
+      <div class="card"><h3>✋ Human in the loop</h3><p>Risky tools go through Claude's <code>--permission-prompt-tool</code> to an Approve / Deny / Always allow card in the bubble, plus a notification. If nobody answers, the request is denied: after 5 minutes in chat, after 60 s for scheduled runs. File: <code>src/assistant/approvals.js</code>.</p></div>
+    </div>
+
+    <h3 id="screenshots">Screenshots</h3>
+    <style>
+      .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 14px 0 22px; }
+      .shots figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+      .shots figure > a { display: block; }
+      .shots figure img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border); }
+      .shots figcaption { color: var(--muted); font-size: 13.5px; line-height: 1.45; margin-top: 8px; }
+      .shots figcaption strong { color: var(--text); }
+    </style>
+    <p>These are real captures of the chat panel (<code>web/bubble.html</code> at the panel's 400×620 size), taken in a Playwright browser during the live test pass on 2026-09-30 against the real Claude CLI. Click any image to open it full size. The matching test results are on <a href="testing.html#evidence">Testing &amp; results</a>.</p>
+    <div class="shots">
+      <figure><a href="assets/screenshots/chat-streaming.png"><img loading="lazy" src="assets/screenshots/chat-streaming.png" width="400" height="620" alt="Chat tab: a reminder request with a Scheduled Drink water chip in the reply"></a>
+        <figcaption><strong>Chat, streamed reply.</strong> "Remind me in 5 minutes to drink water" comes back with a <em>Scheduled "Drink water"</em> tool chip, then the time, duration and cost (6 s, $0.028). The header shows 1 task running, and a toast at the bottom reports that another background run has finished, with an <em>Open</em> link.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-tasks.png"><img loading="lazy" src="assets/screenshots/chat-tasks.png" width="400" height="620" alt="Tasks tab with a fired Stretch reminder and two scheduled tasks"></a>
+        <figcaption><strong>Tasks tab.</strong> A reminder that has fired (<em>Stretch</em>) offers <em>Done</em> and <em>Snooze 10 min</em>. Below it is the schedule: a recurring agent task (<em>Daily fact</em>) and a one-off reminder (<em>Drink water</em>, in 4 min), each with run-now and delete buttons. The <em>Reminder / Agent task</em> switch sets what the Add box creates.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-approval-pending.png"><img loading="lazy" src="assets/screenshots/chat-approval-pending.png" width="400" height="620" alt="Approval card for a file write with Approve, Deny and Always allow buttons"></a>
+        <figcaption><strong>Approval card, waiting.</strong> A file write needs your approval. You get <em>Approve</em>, <em>Deny</em> and <em>Always allow</em>, plus an auto-deny countdown (4m 54s). The status line reads <em>Waiting for your approval</em>, and the header reads <em>1 approval waiting for you</em>. Alerts for a finished scheduled task and a reminder sit above the chat.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-approval-approved.png"><img loading="lazy" src="assets/screenshots/chat-approval-approved.png" width="400" height="620" alt="The same approval card after Approve, reading Approved, continuing"></a>
+        <figcaption><strong>The same card after Approve.</strong> It now shows the tool (<em>Write file</em>), the full path in <code>~/CairnWorkspace</code> and <em>Approved — continuing</em>. Meanwhile another background run (the backpack shopping comparison) finished and raised a toast.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-activity.png"><img loading="lazy" src="assets/screenshots/chat-activity.png" width="400" height="620" alt="Activity tab listing finished background runs with time and cost"></a>
+        <figcaption><strong>Activity tab.</strong> Every background run is listed with a state chip, its title, the latest output, elapsed time, cost and age. The header reads <em>Ready · next reminder in 2m</em>. Click a run to open its conversation.</figcaption></figure>
+      <figure><a href="assets/screenshots/chat-alerts-compact.png"><img loading="lazy" src="assets/screenshots/chat-alerts-compact.png" width="400" height="620" alt="Two reminder alerts with Show 1 more alert and Dismiss all controls"></a>
+        <figcaption><strong>Alerts, compacted.</strong> When several alerts pile up, only the newest two are shown, with <em>Show 1 more alert</em> and <em>Dismiss all</em>, so the conversation stays visible underneath. Here the file-write run from the approval card has finished.</figcaption></figure>
+    </div>
+
+    <!-- ============================================================== -->
+    <h2 id="always-on">2. Always-on and background runs</h2>
+    <p>Like ChatGPT Agent and Grok Bot, you <em>hand off</em> work instead of waiting on a chat reply. <code>POST /api/assistant/chat</code> returns <code>202 {runId, conversationId}</code> right away, and the run's lifetime is independent of any browser connection. You can close the panel, quit the web view, or start three more tasks, and the run keeps going. The chat view is just a viewer that follows the selected run over SSE and replays buffered events when you reopen it.</p>
+    <table>
+      <tr><th>Rule</th><th>Behaviour</th><th>Where</th></tr>
+      <tr><td>Concurrency</td><td>Up to <code>settings.maxConcurrentRuns</code> (default <strong>3</strong>) Claude processes at once. Extra runs are <code>queued</code> and start in FIFO order when a slot frees.</td><td><code>src/assistant/agent.js</code></td></tr>
+      <tr><td>Independence</td><td>A run never ends because an SSE client disconnected. Only a result, an error, the budget limit, or an explicit cancel ends it.</td><td><code>agent.js</code>, <code>routes.js</code></td></tr>
+      <tr><td>Waiting for you</td><td>While a run has a pending approval, its state is <code>waiting_approval</code>. The desktop avatar switches to its <em>attention</em> state and shows a red badge with the count.</td><td><code>approvals.js</code>, <code>desktop/CairnBubble.swift</code></td></tr>
+      <tr><td>Run list</td><td><code>listRuns({limit:30})</code> / <code>GET /api/assistant/runs</code> returns <code>{runId, conversationId, title, state, startedAt, finishedAt, lastEvent, costUsd}</code>, newest first. The last 50 runs are kept in memory.</td><td><code>agent.js</code>, <code>routes.js</code></td></tr>
+      <tr><td>Persistence</td><td>A compact runs log is kept in <code>&lt;dataDir&gt;/runs.json</code>. After a server restart, runs that were still in flight are marked <code>error</code> with the reason <code>interrupted</code>. Nothing is silently lost.</td><td><code>agent.js</code></td></tr>
+      <tr><td>Notifications</td><td>When a run finishes (if <code>settings.notifyOnComplete</code>, default on): <em>"Cairn finished: &lt;title&gt;"</em> with the first 120 characters of the result. When an approval is requested: <em>"Cairn needs your approval"</em> with the one-line summary.</td><td><code>routes.js</code> → <code>macos.js notify()</code></td></tr>
+      <tr><td>Keep-alive</td><td>The desktop app polls <code>/api/assistant/health</code> every 3 s. If it started the server and 3 polls in a row fail, its watchdog restarts the server. <strong>Start at Login</strong> is an opt-in menu toggle.</td><td><a href="desktop.html#watchdog">Floating bubble app</a></td></tr>
+    </table>
+
+    <div class="diagram-title">Figure 1 — Background run lifecycle (state machine)</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> queued: chat message or scheduled agent task
+  queued --> running: a slot is free (fewer than maxConcurrentRuns)
+  running --> waiting_approval: approval_prompt called for a risky tool
+  waiting_approval --> running: approved, denied or timed out (deny)
+  running --> done: result event from claude
+  running --> error: CLI failure, budget or timeout
+  queued --> cancelled: user cancels
+  running --> cancelled: user cancels (process killed)
+  waiting_approval --> cancelled: user cancels
+  running --> error: server restarted (interrupted)
+  waiting_approval --> error: server restarted (interrupted)
+  done --> [*]
+  error --> [*]
+  cancelled --> [*]
+    </pre></div>
+    <p class="diagram-caption">A run moves between <code>running</code> and <code>waiting_approval</code> as many times as Claude asks for risky tools. A denial does not end the run. Claude is told why it was denied and adapts. Each state change is broadcast as <code>run_update</code> on <code>/api/assistant/events</code>.</p>
+
+    <div class="diagram-title">Figure 2 — Hand off and walk away (always-on sequence)</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant B as Bubble panel
+  participant R as routes.js
+  participant A as AssistantAgent
+  participant N as macOS Notification Center
+  U->>B: "Research standing desks under 400 dollars"
+  B->>R: POST /api/assistant/chat
+  R-->>B: 202 runId r1
+  B-->>U: toast: Working on it in the background
+  U->>B: "Every weekday 8am, brief me on AI news"
+  B->>R: POST /api/assistant/chat
+  R-->>B: 202 runId r2
+  U->>B: Esc (panel hides, web state kept)
+  Note over A: r1 and r2 keep running with no SSE client attached
+  A->>R: r2 done (task scheduled)
+  R->>N: Cairn finished: Every weekday 8am...
+  A->>R: r1 wants browser_click (Add to cart)
+  R->>N: Cairn needs your approval
+  N-->>U: banner, bubble shows red badge 1
+  U->>B: click bubble, Activity tab, Approve
+  B->>R: POST /api/assistant/approvals/:id allow
+  A->>R: r1 done
+  R->>N: Cairn finished: Research standing desks...
+</pre></div>
+    <p class="diagram-caption">The composer never blocks. Each message starts its own run, and the Activity tab lists them all with state chips, elapsed time, last step and cost.</p>
+
+    <div class="diagram-title">Figure 3 — Run admission and the concurrency pool</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  IN1["Chat message<br/>POST /api/assistant/chat"] --> Q["Run queue (FIFO)<br/>state queued"]
+  IN2["Scheduled agent task<br/>agent.runOnce(prompt)"] --> Q
+  Q --> S{"Fewer than<br/>maxConcurrentRuns (3)<br/>running?"}
+  S -->|no| W["Stay queued"]
+  W --> S
+  S -->|yes| P["Spawn claude -p<br/>state running"]
+  P --> F["Run finishes<br/>done, error or cancelled"]
+  F --> L["Slot freed<br/>next queued run starts"]
+  L --> S
+  F --> LOG["runs.json (compact log)<br/>+ run_done event + notification"]
+    </pre></div>
+    <p class="diagram-caption">Scheduled agent tasks use the same pool as chat runs, so a burst of 8 am tasks cannot start dozens of Claude processes.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="research">3. Researched feature catalogue</h2>
+    <p>This is what the leading assistants did as of September 2026, and what Cairn takes from each. The facts come from vendor announcements and help pages, with trade-press coverage where noted. See <a href="#sources">sources</a>.</p>
+
+    <h3>ChatGPT Agent (OpenAI, launched 17 July 2025)</h3>
+    <table>
+      <tr><th>Capability</th><th>What it is</th><th>Cairn takeaway</th></tr>
+      <tr><td>Operator + deep research merged</td><td>A single agent mode that combines Operator (web actions, January 2025) with deep research (multi-step synthesis, February 2025). It launched for Pro, Plus and Team users.</td><td>One assistant loop does both research and actions. Claude chooses the tools.</td></tr>
+      <tr><td>Virtual computer</td><td>Each task runs on an OpenAI-hosted virtual computer that keeps context across tools. The agent can download a file, work on it in the terminal, and view the result in the browser.</td><td>Cairn uses <em>your</em> Mac instead of a cloud VM, so it can reach your real files and apps. That is why every write or command is gated.</td></tr>
+      <tr><td>Visual browser + text browser</td><td>A GUI browser for clicking, scrolling and filling forms, and a fast text browser for reading.</td><td>Playwright MCP (visual, optional) plus <code>WebFetch</code> and the Cairn fetcher (text).</td></tr>
+      <tr><td>Terminal, API access</td><td>A command line in the VM for code, data analysis, and producing spreadsheets and slides.</td><td>Claude <code>Bash</code> on your Mac. Every command needs approval.</td></tr>
+      <tr><td>Connectors</td><td>Gmail, Google Drive, Google Calendar, GitHub, SharePoint and others, for reading your data.</td><td>Mac apps through AppleScript (Reminders, Calendar, Notifications, open app or URL). There are no cloud connectors yet.</td></tr>
+      <tr><td>Takeover mode</td><td>You take control of the agent's browser, for example to log in. What you type in takeover is not seen by the model.</td><td>The Playwright browser is a visible window on your Mac, so you can sign in yourself there at any time.</td></tr>
+      <tr><td>Confirmations</td><td>It asks for explicit permission before consequential actions such as purchases or sending email, and refuses high-risk tasks such as bank transfers.</td><td>A tool-level permission gate (<code>--permission-prompt-tool</code>), plus prompt rules: never pay, and ask before sending any message.</td></tr>
+      <tr><td>Watch mode</td><td>On sensitive sites such as email, you must supervise. The agent pauses if you leave.</td><td>No automatic watch mode. Instead, every interactive browser action needs approval unless you turn on <code>autoApproveBrowser</code>.</td></tr>
+      <tr><td>Scheduled agent tasks</td><td>A finished agent task can be set to repeat, for example a weekly report every Monday.</td><td><code>schedule_task</code> with <code>kind:'agent'</code> and a <code>recurrence</code>.</td></tr>
+      <tr><td>Prompt-injection posture</td><td>Confirmations, watch mode, refusals, and memory turned off for agent at launch, to limit data exfiltration.</td><td>An approval gate and a read-only auto list. Cairn has no injection classifier. See <a href="#limits">limits</a>.</td></tr>
+    </table>
+
+    <h3>ChatGPT Tasks (OpenAI, beta from 14 January 2025)</h3>
+    <p>"4o with scheduled tasks" lets ChatGPT run a prompt later, once or on a repeating schedule ("Remind me when my passport expires in six months", "Every Friday, give me a weekend plan"). Results arrive as push notifications or email and appear in the conversation. Tasks are managed on a Tasks page on the web. The beta limit was 10 active tasks, for Plus, Team and Pro. <strong>Cairn equivalent:</strong> <code>TaskScheduler</code> with two kinds of task. <code>reminder</code> sends a notification only. <code>agent</code> runs Claude unattended and notifies you with a summary. Tasks are managed in the bubble's Tasks tab.</p>
+
+    <h3>ChatGPT shopping research and Instant Checkout (OpenAI)</h3>
+    <ul>
+      <li><strong>Shopping research</strong> (24 November 2025, all logged-in users): it asks clarifying questions (budget, who it is for, must-have features), researches retailers and reviews, and returns a structured buyer's guide with prices, availability, trade-offs and "More like this / Not interested" refinement. It is powered by a GPT-5 mini variant trained for shopping. OpenAI warns it can get prices and availability wrong.</li>
+      <li><strong>Instant Checkout</strong> (29 September 2025, US): "Buy it in ChatGPT", built on the open <strong>Agentic Commerce Protocol</strong> (ACP) co-developed with Stripe. Trade press reports that OpenAI wound it down in March 2026 after low merchant adoption and product-data accuracy problems. Checkout moved back to the merchant's own site or app.</li>
+    </ul>
+    <div class="callout"><strong>Cairn's choice:</strong> research, compare and add to cart, then <em>hand off checkout</em>. Cairn never types card numbers, never stores payment data, and never places orders. The industry's move back to "discover in AI, buy on the merchant's site" supports this.</div>
+
+    <h3>Grok: DeepSearch, Tasks and Grok Bot (xAI)</h3>
+    <ul>
+      <li><strong>DeepSearch</strong> (with Grok 3, February 2025): an agentic search mode that synthesizes web and X results and reasons about conflicting sources.</li>
+      <li><strong>Grok Tasks</strong> (mid-2025): scheduled prompts that run once, daily, weekly or monthly, including DeepSearch runs. Results arrive as notifications or email. Paid tiers get more tasks.</li>
+      <li><strong>Grok Bot</strong> (announced 11 August 2026, early beta): a computer-use agent with its own cloud computer (a Linux VM with browser, file system and terminal). It works through multi-step jobs <em>24/7, even while your device is off</em>, and comes back only when it needs human approval. Other reported features: "teach-a-task" (record a workflow once and it becomes a reusable routine), memory of earlier corrections, and desktop and mobile apps. This is the "always active, working in the background" behaviour Cairn's always-on model follows. Cairn runs locally, not in the cloud.</li>
+    </ul>
+
+    <h3>Claude in Chrome and Claude computer use (Anthropic)</h3>
+    <ul>
+      <li><strong>Computer use</strong> (public beta, October 2024): an API tool that lets Claude see screenshots and control the mouse and keyboard. Anthropic recommends running it in an isolated VM or container with minimal privileges.</li>
+      <li><strong>Claude in Chrome</strong> (research preview August 2025, then all Max users November 2025, then Pro, Team and Enterprise December 2025): a browser extension with <em>site-level permissions</em> and a "manually approve" mode. Even when a site is always allowed, it asks before publishing, purchasing, sharing personal data, downloading files or granting authorizations. High-risk site categories (financial services, adult content, piracy) are blocked, and classifiers watch for injected instructions. Anthropic reported that mitigations cut prompt-injection attack success from 23.6% to 11.2%, and on browser-specific challenge cases from 35.7% to 0%.</li>
+      <li><strong>Claude Code CLI</strong>: headless <code>claude -p</code> with <code>--output-format stream-json</code>, MCP servers, <code>--allowedTools</code>, and <code>--permission-prompt-tool</code>. These are the parts Cairn builds on.</li>
+    </ul>
+
+    <!-- ============================================================== -->
+    <h2 id="compare">4. Comparison: ChatGPT, Grok and Cairn</h2>
+    <p>Legend: <span class="badge good">Implemented</span> in the assistant modules. <span class="badge info">Via Claude</span> means it comes from Claude's built-in abilities, prompted by Cairn. <span class="badge warn">Partial</span> means it exists in a narrower form. <span class="badge">Not yet</span> means not built. <span class="badge bad">By design: no</span> means deliberately left out.</p>
+    <table>
+      <tr><th>Capability</th><th>ChatGPT (Agent / Tasks / Shopping)</th><th>Grok (Tasks / DeepSearch / Bot)</th><th>Cairn Assistant</th><th>Status</th><th>Where in Cairn</th></tr>
+      <tr><td>One-time reminders</td><td>Tasks: push or email</td><td>Tasks: notification or email</td><td>Scheduler plus a macOS notification and a bubble banner</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/scheduler.js</code>, <code>mcp-tools.js</code> <code>schedule_task</code></td></tr>
+      <tr><td>Recurring prompts / scheduled agent runs</td><td>Tasks and recurring agent tasks</td><td>Daily, weekly, monthly</td><td>Every minute, hour, day, week or weekday, with interval, <code>at</code> and <code>days</code>. Agent tasks run unattended.</td><td><span class="badge good">Implemented</span></td><td><code>scheduler.js</code> <code>nextOccurrence</code>, <code>agent.js</code> <code>runOnce</code></td></tr>
+      <tr><td>Natural-language times</td><td>Model-interpreted</td><td>Model-interpreted</td><td>Claude computes local ISO times. <code>parseWhen</code> handles quick-add text such as "tomorrow at 9am".</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/when.js</code></td></tr>
+      <tr><td>Native reminders and calendar</td><td>Google Calendar connector</td><td>—</td><td>Reminders.app and Calendar.app through <code>osascript</code>, only when you ask for them</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/macos.js</code></td></tr>
+      <tr><td>Web search and live pages</td><td>Search plus text browser</td><td>Web and X search</td><td>Claude <code>WebSearch</code>/<code>WebFetch</code> plus the Cairn index and compliant fetcher</td><td><span class="badge info">Via Claude</span></td><td><code>agent.js</code> allowlist, <code>src/agent/mcp-server.js</code></td></tr>
+      <tr><td>Deep, multi-step research</td><td>Deep research</td><td>DeepSearch</td><td>Claude agent loop with cited sources</td><td><span class="badge info">Via Claude</span></td><td><code>agent.js</code> (see also <code>src/agent/research.js</code>)</td></tr>
+      <tr><td>Visual browser (click, type, forms)</td><td>Cloud VM browser</td><td>Bot: cloud VM browser</td><td>Playwright MCP in a visible window on your Mac. Interactive actions need approval.</td><td><span class="badge good">Implemented</span> <span class="badge">opt-in</span></td><td><code>agent.js</code> (MCP config), <code>settings.allowBrowser</code></td></tr>
+      <tr><td>Terminal / code execution</td><td>VM terminal</td><td>Bot: VM terminal</td><td>Claude <code>Bash</code> on your Mac. Every command needs approval.</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code>, <code>approvals.js</code></td></tr>
+      <tr><td>Local files</td><td>Uploads only</td><td>Bot: its own VM disk</td><td>Your real files. <code>Read</code>/<code>Glob</code>/<code>Grep</code> run without asking. <code>Write</code>/<code>Edit</code> need approval. Working directory is <code>settings.workDir</code>.</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code></td></tr>
+      <tr><td>Open apps, URLs, clipboard</td><td>—</td><td>—</td><td><code>open_app</code>, <code>open_url</code> and <code>clipboard_write</code> run without asking. <code>clipboard_read</code> needs approval.</td><td><span class="badge good">Implemented</span></td><td><code>mcp-tools.js</code>, <code>macos.js</code></td></tr>
+      <tr><td>Cloud connectors (mail, drive, code hosts)</td><td>Many connectors</td><td>Bot signs in to your apps</td><td>Not wired in yet. You could add more MCP servers.</td><td><span class="badge">Not yet</span></td><td>—</td></tr>
+      <tr><td>Shopping research / buyer's guide</td><td>Shopping research</td><td>General search</td><td>Clarifying questions, a comparison table (product, store, price, rating, link), and a shopping list</td><td><span class="badge good">Implemented</span></td><td><code>src/assistant/shopping.js</code>, system prompt in <code>agent.js</code></td></tr>
+      <tr><td>Checkout and payment</td><td>Instant Checkout (Sept 2025, wound down March 2026)</td><td>—</td><td>Never pays. It gives you the checkout link and opens it in your browser.</td><td><span class="badge bad">By design: no</span></td><td>system prompt in <code>agent.js</code></td></tr>
+      <tr><td>Confirm before consequential actions</td><td>Yes</td><td>Bot returns when approval is needed</td><td>A per-tool permission gate with Approve / Deny / Always allow and timeouts</td><td><span class="badge good">Implemented</span></td><td><code>approvals.js</code>, <code>mcp-tools.js</code> <code>approval_prompt</code></td></tr>
+      <tr><td>Takeover and watch mode</td><td>Takeover and watch mode</td><td>—</td><td>A visible Playwright window you can use directly. No automatic watch mode.</td><td><span class="badge warn">Partial</span></td><td>Playwright MCP</td></tr>
+      <tr><td>Always-on background work</td><td>Cloud, runs while you do other things</td><td>Bot: 24/7 cloud, even with your device off</td><td>Background runs keep going with the panel closed, with a watchdog and an opt-in login item. Only works while the Mac is awake.</td><td><span class="badge good">Implemented</span> <span class="badge warn">local only</span></td><td><code>agent.js</code>, <code>desktop/CairnBubble.swift</code></td></tr>
+      <tr><td>Several tasks in parallel</td><td>Multiple agent chats</td><td>Multiple Bots</td><td>3 at once by default, extra runs queue</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code> <code>listRuns</code></td></tr>
+      <tr><td>Activity / tasks dashboard</td><td>Tasks page</td><td>Tasks page</td><td>Activity, Tasks, Shopping and History tabs in the bubble</td><td><span class="badge good">Implemented</span></td><td><code>web/bubble.html</code>, <code>web/bubble.js</code></td></tr>
+      <tr><td>Completion and attention notifications</td><td>Push or email</td><td>Push or email</td><td>macOS Notification Center, and the avatar's <em>attention</em> state (pulse and badge) and <em>working</em> state</td><td><span class="badge good">Implemented</span></td><td><code>routes.js</code>, <code>macos.js</code>, <code>CairnBubble.swift</code></td></tr>
+      <tr><td>Memory</td><td>Account memory (off for agent at launch)</td><td>Bot remembers corrections</td><td>Per-conversation memory through <code>claude --resume</code>. Nothing is shared across conversations.</td><td><span class="badge warn">Partial</span></td><td><code>src/assistant/conversations.js</code></td></tr>
+      <tr><td>Teach-a-task (record a workflow)</td><td>—</td><td>Bot</td><td>—</td><td><span class="badge">Not yet</span></td><td>—</td></tr>
+      <tr><td>Desktop presence</td><td>Desktop app with a ⌥Space chat bar</td><td>Desktop apps</td><td>A floating, always-on-top, draggable animated avatar (three styles) on every Space. ⌥Space toggles the chat panel. See <a href="desktop.html#avatars">Avatars and states</a>.</td><td><span class="badge good">Implemented</span></td><td><code>desktop/CairnBubble.swift</code>, <code>web/avatars/*.html</code></td></tr>
+      <tr><td>Cost control</td><td>Monthly message quotas</td><td>Tier quotas</td><td><code>--max-budget-usd</code> per run (default 2) and cost shown for each run</td><td><span class="badge good">Implemented</span></td><td><code>agent.js</code>, <code>assistant-settings.json</code></td></tr>
+      <tr><td>Where it runs</td><td>OpenAI cloud VM</td><td>xAI cloud VM</td><td>Your Mac (<code>127.0.0.1</code>). The model is reached through your Claude login.</td><td><span class="badge info">Local-first</span></td><td><code>bin/cairn.js serve</code></td></tr>
+    </table>
+    <p>Status reflects the assistant build contract (<code>SPEC-ASSISTANT.md</code>). For verification results, see <a href="testing.html">Testing &amp; results</a>.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="architecture">5. Architecture</h2>
+    <div class="diagram-title">Figure 4 — Assistant architecture (containers and files)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph MAC["Your Mac"]
+    BUB["Floating bubble<br/>desktop/CairnBubble.swift"]
+    PANEL["Chat panel (WKWebView)<br/>web/bubble.html + bubble.js"]
+    APPS["Notification Center,<br/>Reminders, Calendar"]
+  end
+  subgraph SRV["Cairn server on 127.0.0.1:8787"]
+    RT["src/assistant/routes.js<br/>createAssistant()"]
+    AG["AssistantAgent<br/>agent.js"]
+    AQ["ApprovalQueue<br/>approvals.js"]
+    TS["TaskScheduler<br/>scheduler.js + when.js"]
+    CS["ConversationStore<br/>conversations.js"]
+    SH["Shopping list<br/>shopping.js"]
+    MO["macos.js<br/>osascript, open, pbcopy"]
+    CORE["Cairn engine<br/>index, fetcher, robots, audit"]
+  end
+  subgraph CLI["Claude CLI subprocess (one per run)"]
+    CP["claude -p<br/>stream-json"]
+    MT["MCP: assistant<br/>src/assistant/mcp-tools.js"]
+    MC["MCP: cairn<br/>src/agent/mcp-server.js"]
+    PW["MCP: playwright<br/>optional, visible browser"]
+  end
+  subgraph DATA["dataDir (default data/)"]
+    D1["conversations/*.json"]
+    D2["runs.json"]
+    D3["tasks.json"]
+    D4["shopping.json"]
+    D5["assistant-settings.json"]
+  end
+  BUB -->|"click / ⌥Space"| PANEL
+  BUB -->|"GET /api/assistant/health every 3 s"| RT
+  PANEL -->|"fetch + EventSource /api/assistant/*"| RT
+  RT --> AG
+  RT --> AQ
+  RT --> TS
+  RT --> SH
+  AG --> CS
+  AG -->|"spawn, args array, prompt on stdin"| CP
+  CP --> MT
+  CP --> MC
+  CP --> PW
+  MT -->|"HTTP to CAIRN_API"| RT
+  MC -->|"HTTP /api/search, /api/fetch"| CORE
+  RT --> MO
+  MO --> APPS
+  CS --> D1
+  AG --> D2
+  TS --> D3
+  SH --> D4
+  RT --> D5
+    </pre></div>
+    <p class="diagram-caption">The MCP servers never touch the Mac or the stores directly. They proxy over HTTP back to the Cairn API, so every action passes the same guards (loopback bind, JSON content type, Origin check) and is recorded in one place.</p>
+
+    <table>
+      <tr><th>File</th><th>Responsibility</th></tr>
+      <tr><td><code>src/assistant/routes.js</code></td><td><code>createAssistant({runtime})</code> returns <code>{handle, agent, approvals, scheduler, conversations, shopping, settings, start, stop}</code>. It owns all <code>/api/assistant/*</code> routes, the SSE streams, notifications and settings.</td></tr>
+      <tr><td><code>src/assistant/agent.js</code></td><td><code>AssistantAgent</code>: spawns <code>claude -p</code>, builds the MCP config and <code>--allowedTools</code>, parses stream-json, manages the run pool, <code>listRuns</code>, <code>runs.json</code> and <code>runOnce</code> for scheduled tasks.</td></tr>
+      <tr><td><code>src/assistant/approvals.js</code></td><td><code>ApprovalQueue</code>: pending approvals, timeouts, and one-line summaries such as <em>Run shell command: ls -la ~/Downloads</em>.</td></tr>
+      <tr><td><code>src/assistant/conversations.js</code></td><td><code>ConversationStore</code>: one JSON file per conversation, including the Claude <code>sessionId</code> and the <code>allowAlways</code> list.</td></tr>
+      <tr><td><code>src/assistant/scheduler.js</code>, <code>when.js</code></td><td><code>TaskScheduler</code> (5 s tick, atomic persistence to <code>&lt;dataDir&gt;/tasks.json</code>, no burst after sleep) and <code>parseWhen</code> natural-language time parsing.</td></tr>
+      <tr><td><code>src/assistant/mcp-tools.js</code></td><td>The <code>assistant</code> stdio MCP server: scheduling, Mac, shopping and clipboard tools, and the <code>approval_prompt</code> permission tool.</td></tr>
+      <tr><td><code>src/assistant/macos.js</code></td><td>Mac integration through <code>execFile</code> (never a shell), with escaped AppleScript and a dry-run mode (<code>CAIRN_MAC_DRYRUN=1</code>).</td></tr>
+      <tr><td><code>src/assistant/shopping.js</code></td><td>The shopping list (<code>&lt;dataDir&gt;/shopping.json</code>).</td></tr>
+      <tr><td><code>web/bubble.html</code>, <code>bubble.js</code>, <code>bubble.css</code></td><td>The compact UI with Chat, Activity, Tasks, Shopping and History tabs and approval cards.</td></tr>
+      <tr><td><code>desktop/CairnBubble.swift</code> + <code>build.sh</code>, <code>run.sh</code>, <code>Info.plist</code></td><td>The native floating bubble and panel, server launch, health polling and watchdog. See <a href="desktop.html">Floating bubble app</a>.</td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="chat-turn">6. A chat turn, end to end</h2>
+    <div class="diagram-title">Figure 5 — Chat turn sequence (bubble → API → AssistantAgent → claude -p → MCP tools → API)</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as You
+  participant B as bubble.js
+  participant R as routes.js
+  participant A as AssistantAgent
+  participant C as claude -p
+  participant M as mcp-tools.js
+  U->>B: "Remind me to call mom at 6pm"
+  B->>R: POST /api/assistant/chat {message, conversationId}
+  R->>A: startRun({conversationId, message})
+  A-->>R: {runId, conversationId}
+  R-->>B: 202 {runId, conversationId}
+  B->>R: GET /api/assistant/runs/:runId/events (SSE)
+  A->>C: spawn (args array), prompt via stdin
+  C-->>A: system init (session_id)
+  C->>M: tools/call schedule_task {title, when}
+  M->>R: POST /api/assistant/tasks
+  R-->>M: 201 {task}
+  M-->>C: tool result text
+  C-->>A: assistant text + result (cost, session_id)
+  A-->>R: events tool, tool_result, text, result, done
+  R-->>B: SSE events (replayed if you reconnect)
+  A->>A: save assistant message, setSession()
+  B-->>U: reply + chip: Scheduled "Call mom" at 18:00
+</pre></div>
+    <p class="diagram-caption"><code>schedule_task</code> is auto-approved, so this turn needs no approval card. The run continues even if the SSE connection in step 6 drops. Reopening the panel replays the buffered events.</p>
+
+    <p>What the agent spawns (argument array, no shell):</p>
+    <pre class="code"><code>claude -p --output-format stream-json --verbose
+  --model &lt;settings.model || config.agent.model&gt;
+  [--resume &lt;conversation.sessionId&gt;]
+  --strict-mcp-config --mcp-config &lt;tmp.json: assistant, cairn, playwright?&gt;
+  --permission-prompt-tool mcp__assistant__approval_prompt
+  --allowedTools &lt;auto-approved list + conversation allowAlways&gt;
+  --append-system-prompt &lt;assistant prompt: date/time/timezone, tools, rules&gt;
+  --max-budget-usd &lt;settings.maxBudgetUsd&gt;
+# cwd = settings.workDir (default: your home directory); prompt written to stdin</code></pre>
+
+    <!-- ============================================================== -->
+    <h2 id="tools">7. Tool catalogue</h2>
+    <div class="diagram-title">Figure 6 — Tool catalogue (mindmap)</div>
+    <div class="diagram"><pre class="mermaid">
+mindmap
+  root((Cairn assistant tools))
+    Scheduling
+      schedule_task
+      list_tasks
+      cancel_task
+    Mac apps
+      apple_reminder
+      calendar_event
+      notify
+      open_url
+      open_app
+      clipboard_read
+      clipboard_write
+    Search and research
+      web_research
+      WebSearch
+      WebFetch
+      cairn search_index
+      cairn fetch_page
+      cairn crawl_site
+    Shopping
+      shopping_list_add
+      shopping_list
+      shopping_list_remove
+    Browser via Playwright
+      browser_navigate
+      browser_snapshot
+      browser_click
+      browser_type
+      browser_fill_form
+    Computer
+      Read Glob Grep
+      Bash
+      Write Edit
+    Safety
+      approval_prompt
+    </pre></div>
+    <p class="diagram-caption">The <code>assistant</code> MCP server (<code>src/assistant/mcp-tools.js</code>) supplies the scheduling, Mac, shopping and safety tools. The <code>cairn</code> server supplies the index and fetcher. Playwright is optional. The rest are Claude built-ins.</p>
+
+    <table>
+      <tr><th>Tool (MCP name)</th><th>Input</th><th>Proxies to</th></tr>
+      <tr><td><code>mcp__assistant__schedule_task</code></td><td><code>{title, when, kind:'reminder'|'agent', prompt?, notes?, recurrence?:{every, interval?, at?, days?}}</code></td><td><code>POST /api/assistant/tasks</code></td></tr>
+      <tr><td><code>list_tasks</code> / <code>cancel_task</code></td><td><code>{}</code> / <code>{id}</code></td><td><code>GET</code> / <code>DELETE /api/assistant/tasks[/:id]</code></td></tr>
+      <tr><td><code>notify</code></td><td><code>{title, message}</code></td><td><code>POST /api/assistant/notify</code></td></tr>
+      <tr><td><code>apple_reminder</code> / <code>calendar_event</code></td><td><code>{title, due?, list?, notes?}</code> / <code>{title, start, end?, calendar?, location?, notes?}</code></td><td><code>POST /api/assistant/mac/reminder</code> / <code>…/mac/calendar</code></td></tr>
+      <tr><td><code>open_url</code> / <code>open_app</code></td><td><code>{url}</code> (http/https only) / <code>{name}</code></td><td><code>POST /api/assistant/open</code></td></tr>
+      <tr><td><code>web_research</code></td><td><code>{query, limit?}</code></td><td><code>POST /api/search</code> (the Cairn index; Claude is also told to use <code>WebSearch</code>)</td></tr>
+      <tr><td><code>shopping_list_add</code> / <code>shopping_list</code> / <code>shopping_list_remove</code></td><td><code>{item, url?, price?, store?, notes?}</code> / <code>{}</code> / <code>{id}</code></td><td><code>/api/assistant/shopping</code></td></tr>
+      <tr><td><code>clipboard_read</code> / <code>clipboard_write</code></td><td><code>{}</code> / <code>{text}</code></td><td><code>POST /api/assistant/clipboard</code></td></tr>
+      <tr><td><code>approval_prompt</code></td><td><code>{tool_name, input, tool_use_id?}</code></td><td><code>POST /api/assistant/approvals</code> then long-polls <code>…/approvals/:id/wait</code></td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="safety">8. Safety model and approval policy</h2>
+    <p>Cairn acts on your real computer, not a disposable VM, so the safety model is conservative by default. Four layers apply:</p>
+    <ol>
+      <li><strong>Tool allowlist.</strong> Only read-only or low-risk tools are in <code>--allowedTools</code>. Anything else makes the Claude CLI call the permission tool.</li>
+      <li><strong>Human approval.</strong> <code>mcp__assistant__approval_prompt</code> puts the request in the <code>ApprovalQueue</code>. The bubble shows an Approve / Deny / Always allow card with a one-line summary and an input preview, and macOS shows a notification.</li>
+      <li><strong>Prompt rules.</strong> Never enter payment details or place orders. Ask before sending any message or email. In unattended runs, never ask questions.</li>
+      <li><strong>Platform guards.</strong> Loopback-only server. POST and DELETE require <code>Content-Type: application/json</code>, and any <code>Origin</code> must match (CSRF). Process spawns use argument arrays, never a shell. AppleScript strings are escaped. <code>open_url</code> accepts only http and https. There is a per-run budget cap, and every run is recorded in the audit log (<code>kind:'agent', mode:'assistant'</code>).</li>
+    </ol>
+
+    <h3 id="policy">Approval policy by tool</h3>
+    <table>
+      <tr><th>Tool</th><th>Policy</th><th>Why</th></tr>
+      <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code></td><td><span class="badge good">auto</span></td><td>Read-only file inspection</td></tr>
+      <tr><td><code>WebSearch</code>, <code>WebFetch</code></td><td><span class="badge good">auto</span></td><td>Read-only web access</td></tr>
+      <tr><td><code>mcp__cairn__search_index</code>, <code>fetch_page</code>, <code>check_robots</code>, <code>index_stats</code></td><td><span class="badge good">auto</span></td><td>Cairn's robots-respecting fetcher and local index</td></tr>
+      <tr><td><code>mcp__cairn__crawl_site</code></td><td><span class="badge warn">ask</span></td><td>Starts a multi-page crawl</td></tr>
+      <tr><td><code>schedule_task</code>, <code>list_tasks</code>, <code>cancel_task</code></td><td><span class="badge good">auto</span></td><td>Only touches Cairn's own task list, which you can see and cancel</td></tr>
+      <tr><td><code>notify</code>, <code>apple_reminder</code>, <code>calendar_event</code></td><td><span class="badge good">auto</span></td><td>Creates entries on your own Mac only. It never invites or sends anything.</td></tr>
+      <tr><td><code>open_url</code>, <code>open_app</code></td><td><span class="badge good">auto</span></td><td>Opens things for you to look at. <code>open_url</code> is limited to http and https.</td></tr>
+      <tr><td><code>web_research</code>, <code>shopping_list_*</code></td><td><span class="badge good">auto</span></td><td>Local index search and your shopping list</td></tr>
+      <tr><td><code>clipboard_write</code></td><td><span class="badge good">auto</span></td><td>Puts text on the clipboard for you</td></tr>
+      <tr><td><code>clipboard_read</code></td><td><span class="badge warn">ask</span></td><td>The clipboard often holds passwords, tokens or private text</td></tr>
+      <tr><td><code>mcp__playwright__browser_navigate</code>, <code>navigate_back</code>, <code>snapshot</code>, <code>take_screenshot</code>, <code>tabs</code>, <code>wait_for</code></td><td><span class="badge good">auto</span></td><td>Looking at pages does not change anything</td></tr>
+      <tr><td><code>browser_click</code>, <code>browser_type</code>, <code>browser_fill_form</code>, <code>select_option</code>, <code>press_key</code>, <code>file_upload</code>, <code>evaluate</code>, <code>handle_dialog</code>, …</td><td><span class="badge warn">ask</span> (<span class="badge good">auto</span> if <code>autoApproveBrowser</code>)</td><td>These can submit forms, post content, or add to a cart</td></tr>
+      <tr><td><code>Bash</code></td><td><span class="badge warn">ask</span></td><td>Arbitrary commands on your Mac</td></tr>
+      <tr><td><code>Write</code>, <code>Edit</code> (and other file-changing built-ins)</td><td><span class="badge warn">ask</span></td><td>Changes your files</td></tr>
+      <tr><td>Anything else not listed</td><td><span class="badge warn">ask</span></td><td>Default-deny: if a tool is not on the allowlist, it goes to the approval prompt</td></tr>
+      <tr><td>A tool you chose "Always allow" for</td><td><span class="badge good">auto</span> in that conversation</td><td>Stored in the conversation's <code>allowAlways</code> list and passed in <code>--allowedTools</code> on later turns</td></tr>
+      <tr><td>Entering payment details or placing an order</td><td><span class="badge bad">never</span></td><td>Enforced by the system prompt rule. Card and checkout form typing also needs approval by default.</td></tr>
+    </table>
+
+    <div class="diagram-title">Figure 7 — Auto-approve vs prompt decision (flowchart)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  T["Claude decides to call a tool"] --> A1{"Built-in Read, Glob, Grep,<br/>WebSearch or WebFetch?"}
+  A1 -->|yes| AUTO["Auto-approved:<br/>runs immediately"]
+  A1 -->|no| A2{"mcp__assistant__ tool?"}
+  A2 -->|"yes, except clipboard_read"| AUTO
+  A2 -->|clipboard_read| ASK
+  A2 -->|no| A3{"cairn read tool?<br/>search_index, fetch_page,<br/>check_robots, index_stats"}
+  A3 -->|yes| AUTO
+  A3 -->|no| A4{"Playwright read-only?<br/>navigate, back, snapshot,<br/>screenshot, tabs, wait_for"}
+  A4 -->|yes| AUTO
+  A4 -->|no| A5{"Playwright tool and<br/>autoApproveBrowser on?"}
+  A5 -->|yes| AUTO
+  A5 -->|no| A6{"In this conversation's<br/>allowAlways list?"}
+  A6 -->|yes| AUTO
+  A6 -->|no| ASK["CLI calls approval_prompt<br/>ApprovalQueue + card + notification"]
+  ASK --> UN{"Unattended<br/>(scheduled) run?"}
+  UN -->|yes| U60{"Decided within 60 s?"}
+  UN -->|no| T5{"Decided within 5 min?"}
+  U60 -->|no| DENY["Denied: tool not run,<br/>Claude is told why"]
+  T5 -->|no| DENY
+  U60 -->|yes| DEC{"Your decision"}
+  T5 -->|yes| DEC
+  DEC -->|Approve| RUN["Tool runs with updatedInput"]
+  DEC -->|"Always allow"| ALW["Tool runs, and the tool name<br/>is added to allowAlways"]
+  DEC -->|Deny| DENY
+    </pre></div>
+    <p class="diagram-caption">Default-deny: a tool runs without you only if it is on the allowlist. Silence counts as "no".</p>
+
+    <div class="diagram-title">Figure 8 — Approval sequence (permission-prompt-tool)</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant C as claude -p
+  participant M as approval_prompt (mcp-tools.js)
+  participant R as routes.js
+  participant Q as ApprovalQueue
+  participant B as Bubble
+  actor U as You
+  C->>M: tools/call approval_prompt {tool_name: Bash, input}
+  M->>R: POST /api/assistant/approvals {toolName, input, conversationId, runId}
+  R->>Q: request()
+  Q-->>R: {id}
+  R-->>M: {id}
+  R--)B: SSE approval (global events and run stream)
+  R--)U: macOS notification: Cairn needs your approval
+  Note over R: run state becomes waiting_approval
+  loop long-poll, each up to 60 s, overall up to 5 min
+    M->>R: GET /api/assistant/approvals/:id/wait?timeout=60
+    R-->>M: {decided: false}
+  end
+  U->>B: Approve, Deny or Always allow
+  B->>R: POST /api/assistant/approvals/:id {allow, always}
+  R->>Q: resolve(id, decision)
+  R-->>M: {decided: true, decision}
+  M-->>C: behavior allow + updatedInput, or behavior deny + message
+  Note over C: runs the tool, or adapts to the denial
+  R--)B: SSE approval_resolved, run_update running
+</pre></div>
+    <p class="diagram-caption">The MCP tool never decides by itself. It only relays. In unattended runs (<code>CAIRN_UNATTENDED=1</code>) it denies after 60 s so that a 3 am task cannot hang waiting for you.</p>
+
+    <div class="callout warn"><strong>Prompt injection.</strong> Web pages, emails and files can contain text written to steer an AI ("ignore your instructions and…"). Cairn's main defence is the approval gate. A page can make Claude <em>want</em> to run something, but it cannot approve it. Read the summary on each card before you approve, and keep <code>autoApproveBrowser</code> off unless you are working on sites you trust. Cairn has no injection classifier, unlike Claude in Chrome.</div>
+    <div class="callout bad"><strong>Payments.</strong> Cairn is instructed never to enter card or bank details or place orders. It stops at the cart and gives you the checkout link. If you ever see an approval card for typing into a payment form, deny it.</div>
+
+    <!-- ============================================================== -->
+    <h2 id="reminders">9. Reminders and recurring tasks</h2>
+    <p>There are two kinds of task. A <strong>reminder</strong> is a notification at a time. An <strong>agent task</strong> is a prompt that Claude runs unattended at that time, and you are notified with the result. Both can repeat. Claude converts your wording into an exact local ISO time using the current date, time and timezone in its system prompt. The bubble's quick-add box uses <code>parseWhen</code> (<code>src/assistant/when.js</code>) for phrases like <em>in 10 minutes</em>, <em>tomorrow at 9am</em>, <em>every weekday at 9</em> and <em>every 30 minutes</em>.</p>
+
+    <div class="diagram-title">Figure 9 — Reminder lifecycle (state machine)</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> active: schedule_task or POST /api/assistant/tasks
+  active --> firing: tick finds nextRunAt at or before now
+  active --> firing: runNow (Run now button)
+  firing --> active: recurring, nextRunAt advanced (missed runs skipped)
+  firing --> done: one-shot task
+  active --> cancelled: cancel_task, DELETE or Cancel button
+  done --> [*]
+  cancelled --> [*]
+  note right of firing
+    emit due exactly once
+    reminder: macOS notification + SSE reminder
+    agent: agent.runOnce(prompt) then markRun
+  end note
+</pre></div>
+    <p class="diagram-caption"><code>firing</code> is a short step inside a scheduler tick (every 5 s), not a stored status. Stored statuses are <code>active</code>, <code>done</code> and <code>cancelled</code>. If the Mac was asleep, an overdue one-shot fires once when Cairn next ticks. A recurring task skips to its next future occurrence instead of firing a burst of missed runs.</p>
+
+    <div class="diagram-title">Figure 10 — Recurring agent task flow</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  TICK["TaskScheduler tick (5 s)"] --> DUE{"Active task with<br/>nextRunAt reached?"}
+  DUE -->|no| TICK
+  DUE -->|yes| K{"task.kind"}
+  K -->|reminder| NR["macos.notify(title, notes)<br/>SSE reminder, bubble banner,<br/>bubble pulses"]
+  K -->|agent| RO["agent.runOnce(prompt)<br/>new conversation 'Scheduled: ...'"]
+  RO --> POOL["Joins the run pool<br/>(max 3 concurrent)"]
+  POOL --> CL["claude -p with CAIRN_UNATTENDED=1<br/>no questions, risky tools<br/>denied after 60 s"]
+  CL --> MR["scheduler.markRun(id, ok, summary)<br/>keeps the last 20 runs"]
+  MR --> NT["macos.notify short summary<br/>SSE task_result"]
+  NR --> REC{"recurrence set?"}
+  NT --> REC
+  REC -->|yes| NX["nextRunAt = nextOccurrence()<br/>(skips past occurrences)"]
+  REC -->|no| DN["status done"]
+  NX --> TICK
+    </pre></div>
+    <p class="diagram-caption">Example: <em>"Every weekday at 8am, check the Hacker News front page and send me the three most relevant AI stories."</em> Each morning a new "Scheduled: …" conversation appears in History, and a notification carries the summary.</p>
+
+    <table>
+      <tr><th>Recurrence field</th><th>Values</th><th>Example</th></tr>
+      <tr><td><code>every</code></td><td><code>minute</code>, <code>hour</code>, <code>day</code>, <code>week</code>, <code>weekday</code></td><td><code>{every:'weekday', at:'08:00'}</code></td></tr>
+      <tr><td><code>interval</code></td><td>number (default 1)</td><td><code>{every:'minute', interval:30}</code> means every 30 minutes</td></tr>
+      <tr><td><code>at</code></td><td><code>'HH:MM'</code> local time</td><td><code>{every:'day', at:'21:30'}</code></td></tr>
+      <tr><td><code>days</code></td><td><code>['mon','tue',…]</code></td><td><code>{every:'week', days:['mon','thu'], at:'09:00'}</code></td></tr>
+    </table>
+    <p>Reminders.app and Calendar.app are used only when you ask for them ("put it in my Reminders", "add to my calendar"). Otherwise Cairn keeps the reminder in its own scheduler and notifies you directly. The first time Cairn writes to Reminders or Calendar, macOS asks for permission. See <a href="desktop.html#troubleshooting">troubleshooting</a>.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="shopping">10. Shopping with checkout hand-off</h2>
+    <div class="diagram-title">Figure 11 — Shopping flow with checkout hand-off</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  P["You: shop for a quiet cordless<br/>vacuum for a small apartment"] --> Q{"Enough detail?"}
+  Q -->|no| CQ["Ask 1 to 3 clarifying questions<br/>budget, size, must-haves"]
+  CQ --> R
+  Q -->|yes| R["Research (auto-approved)<br/>WebSearch, WebFetch, web_research,<br/>browser navigate and snapshot"]
+  R --> C["Comparison table<br/>product, store, price, rating, link"]
+  C --> L["shopping_list_add (auto)<br/>saved to shopping.json"]
+  C --> CART{"You ask to add to cart?"}
+  CART -->|no| H
+  CART -->|yes| BR["browser_click Add to cart<br/>approval card"]
+  BR --> H["Hand-off: checkout link,<br/>open_url in your browser"]
+  H --> STOP["You sign in, review,<br/>pay and place the order"]
+  L --> H
+    </pre></div>
+    <p class="diagram-caption">Cairn does the research and the tedious clicking. You do the part that spends money. Prices and stock change often, so Cairn shows where each price came from and when.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="computer">11. Computer tasks</h2>
+    <div class="diagram-title">Figure 12 — Computer task flow (files and terminal with approval)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  P["You: organize my Downloads<br/>folder by file type"] --> RD["Inspect with Glob and Read<br/>(auto-approved)"]
+  RD --> PL["Plan: explain the folders and<br/>moves it intends to make"]
+  PL --> BX["Bash: mkdir and mv commands<br/>(needs approval)"]
+  BX --> AP{"Approval card:<br/>Run shell command: ..."}
+  AP -->|Approve| EX["Runs in settings.workDir<br/>(default: home folder)"]
+  AP -->|Deny| AD["Claude stops or proposes<br/>a safer alternative"]
+  AP -->|"Always allow"| AA["Runs, and Bash is auto-approved<br/>for the rest of this conversation"]
+  EX --> VR["Verify with Glob"]
+  AA --> VR
+  VR --> SUM["Summary: what changed,<br/>how to undo it"]
+  AD --> SUM
+    </pre></div>
+    <p class="diagram-caption">Use "Always allow" for <code>Bash</code> sparingly. It applies to every later command in that conversation. Starting a new chat resets it.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="memory">12. Conversation memory (<code>--resume</code>)</h2>
+    <p>Each conversation stores the Claude CLI session id it last used. The next message in the same conversation spawns <code>claude -p --resume &lt;sessionId&gt;</code>, so Claude keeps the full context (earlier tool results, decisions, preferences you stated) without Cairn re-sending the history. If the CLI no longer has that session, the agent retries once without <code>--resume</code>.</p>
+    <div class="diagram-title">Figure 13 — Conversation memory flow</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant B as Bubble
+  participant A as AssistantAgent
+  participant S as ConversationStore
+  participant C as claude -p
+  B->>A: startRun({conversationId, message})
+  A->>S: get(conversationId)
+  S-->>A: conversation (sessionId, allowAlways)
+  alt sessionId present
+    A->>C: spawn with --resume sessionId
+    opt session missing on the CLI side
+      C-->>A: error before any result
+      A->>C: retry once without --resume
+    end
+  else first message
+    A->>C: spawn without --resume
+  end
+  C-->>A: result (text, session_id, total_cost_usd)
+  A->>S: append(assistant message with cost)
+  A->>S: setSession(conversationId, session_id)
+  A-->>B: result + done events
+</pre></div>
+    <p class="diagram-caption">Memory is per conversation. A new chat starts clean, which also resets <code>allowAlways</code>. Files live in <code>&lt;dataDir&gt;/conversations/&lt;id&gt;.json</code>, and deleting a conversation in History removes the file.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="events">13. Events and notifications</h2>
+    <table>
+      <tr><th>Stream</th><th>Event</th><th>Meaning</th></tr>
+      <tr><td rowspan="7"><code>GET /api/assistant/events</code> (global)</td><td><code>run_started</code></td><td>A new background run was admitted (queued or running)</td></tr>
+      <tr><td><code>run_update</code></td><td>A run's state changed (queued, running, waiting_approval)</td></tr>
+      <tr><td><code>run_done</code></td><td>A run finished: done, error or cancelled</td></tr>
+      <tr><td><code>approval</code></td><td>A new pending approval from any run. The bubble badge increases.</td></tr>
+      <tr><td><code>approval_resolved</code></td><td>An approval was decided or timed out</td></tr>
+      <tr><td><code>reminder</code></td><td>A reminder fired. The bubble shows a banner and the native shell pulses.</td></tr>
+      <tr><td><code>task_result</code></td><td>A scheduled agent task finished, with its text</td></tr>
+      <tr><td><code>GET /api/assistant/runs/:runId/events</code></td><td><code>status</code>, <code>text</code>, <code>tool</code>, <code>tool_result</code>, <code>approval</code>, <code>approval_resolved</code>, <code>result</code>, <code>error</code>, <code>done</code></td><td>One run's stream. Buffered events are replayed first, then live events follow. There is a 15 s heartbeat.</td></tr>
+    </table>
+    <p>macOS notifications are sent through <code>osascript display notification</code> (<code>macos.js notify</code>) for reminders, finished runs, finished scheduled tasks and new approvals. <code>GET /api/assistant/health</code> returns <code>{ok, claude, scheduler, runningRuns, queuedRuns, waitingApprovalRuns, pendingApprovals, nextTaskAt, …}</code>. <code>runningRuns</code> also counts runs that are waiting for approval. The desktop bubble uses these fields for the progress ring and badge.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="settings">14. Settings</h2>
+    <p>Settings are stored in <code>&lt;dataDir&gt;/assistant-settings.json</code> and edited with <code>GET</code>/<code>POST /api/assistant/settings</code> (a POST can change only some fields).</p>
+    <table>
+      <tr><th>Key</th><th>Default</th><th>Effect</th></tr>
+      <tr><td><code>model</code></td><td><code>''</code>, which means <code>config.agent.model</code> (<code>sonnet</code>)</td><td>Model passed to <code>claude --model</code></td></tr>
+      <tr><td><code>maxBudgetUsd</code></td><td><code>2</code></td><td>Per-run cap (<code>--max-budget-usd</code>)</td></tr>
+      <tr><td><code>workDir</code></td><td>your home directory</td><td>Working directory for Claude, <code>Bash</code> and relative paths</td></tr>
+      <tr><td><code>allowBrowser</code></td><td><code>true</code></td><td>Adds the Playwright MCP server (<code>npx -y @playwright/mcp@latest</code>)</td></tr>
+      <tr><td><code>autoApproveBrowser</code></td><td><code>false</code></td><td>If true, <em>all</em> Playwright tools are auto-approved. Not recommended.</td></tr>
+      <tr><td><code>notifyWithMac</code></td><td><code>true</code></td><td>macOS notifications for reminders</td></tr>
+      <tr><td><code>notifyOnComplete</code></td><td><code>true</code></td><td>A notification when any background run finishes</td></tr>
+      <tr><td><code>maxConcurrentRuns</code></td><td><code>3</code></td><td>Size of the run pool (a whole number from 1 to 10)</td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="api">15. HTTP API quick reference</h2>
+    <p>All routes are under <code>/api/assistant/</code> on <code>http://127.0.0.1:8787</code>. POST and DELETE need <code>Content-Type: application/json</code>. For the full engine API, see <a href="api.html">HTTP API reference</a>.</p>
+    <table>
+      <tr><th>Method and path</th><th>Purpose</th></tr>
+      <tr><td><code>POST chat</code> <code>{message, conversationId?}</code></td><td>Start a background run. Returns <code>202 {runId, conversationId}</code>.</td></tr>
+      <tr><td><code>GET runs</code> · <code>GET runs/:runId/events</code> · <code>POST runs/:runId/cancel</code></td><td>Run list (Activity tab), one run's SSE stream, cancel a run</td></tr>
+      <tr><td><code>GET conversations</code> · <code>GET</code>/<code>DELETE conversations/:id</code></td><td>History</td></tr>
+      <tr><td><code>GET approvals</code> · <code>POST approvals</code> · <code>GET approvals/:id/wait?timeout=60</code> · <code>POST approvals/:id {allow, message?, always?}</code></td><td>Pending approvals, create (MCP tool), long-poll, decide</td></tr>
+      <tr><td><code>GET</code>/<code>POST tasks</code> · <code>DELETE tasks/:id</code> · <code>POST tasks/:id/run</code> · <code>POST tasks/parse {text}</code></td><td>Reminders and recurring tasks</td></tr>
+      <tr><td><code>POST notify</code> · <code>POST mac/reminder</code> · <code>POST mac/calendar</code> · <code>POST open</code> · <code>POST clipboard</code></td><td>Mac actions (used by the MCP tools)</td></tr>
+      <tr><td><code>GET</code>/<code>POST shopping</code> · <code>DELETE shopping/:id</code></td><td>Shopping list</td></tr>
+      <tr><td><code>GET</code>/<code>POST settings</code> · <code>GET events</code> · <code>GET health</code></td><td>Settings, global SSE, status for the bubble</td></tr>
+    </table>
+    <pre class="code"><code>$ curl -s -X POST http://127.0.0.1:8787/api/assistant/chat \
+    -H 'Content-Type: application/json' \
+    -d '{"message":"Remind me to stretch every weekday at 3pm"}'
+{"runId":"run-…","conversationId":"conv-…"}
+
+$ curl -s http://127.0.0.1:8787/api/assistant/health
+{"ok":true,"claude":{"available":true,…},"runningRuns":1,"queuedRuns":0,"pendingApprovals":0,"nextTaskAt":"2026-10-01T15:00:00-07:00",…}</code></pre>
+
+    <!-- ============================================================== -->
+    <h2 id="prompts">16. Example prompts</h2>
+    <p>Type these into the bubble, or use the quick-action chips. Each one starts a background run. The "Approval" column shows what to expect with default settings.</p>
+
+    <h3>Reminders &amp; scheduling</h3>
+    <table>
+      <tr><th>Prompt</th><th>What Cairn does</th><th>Approval</th></tr>
+      <tr><td>"Remind me to call the dentist tomorrow at 9am."</td><td><code>schedule_task</code> one-shot reminder, then a macOS notification at 09:00</td><td>none</td></tr>
+      <tr><td>"In 20 minutes, tell me to take the pizza out."</td><td>One-shot reminder in 20 minutes</td><td>none</td></tr>
+      <tr><td>"Every weekday at 3pm, remind me to stand up and stretch."</td><td>Recurring reminder <code>{every:'weekday', at:'15:00'}</code></td><td>none</td></tr>
+      <tr><td>"Put 'Renew passport' in my Reminders app for next Monday."</td><td><code>apple_reminder</code> in Reminders.app</td><td>none (macOS asks once for Automation)</td></tr>
+      <tr><td>"Add a calendar event Friday 3 to 4pm: 1:1 with Priya on Zoom."</td><td><code>calendar_event</code> in Calendar.app</td><td>none</td></tr>
+      <tr><td>"Every Monday at 9am, summarise this week's Node.js security releases for me."</td><td>Recurring <strong>agent</strong> task: runs research unattended and notifies you with the summary</td><td>none (risky tools auto-deny)</td></tr>
+      <tr><td>"What reminders do I have this week? Cancel the stretch one."</td><td><code>list_tasks</code> then <code>cancel_task</code></td><td>none</td></tr>
+    </table>
+
+    <h3>Search &amp; research</h3>
+    <table>
+      <tr><th>Prompt</th><th>What Cairn does</th><th>Approval</th></tr>
+      <tr><td>"What's new in the latest macOS release? Cite sources."</td><td><code>WebSearch</code> + <code>WebFetch</code>, then a cited answer</td><td>none</td></tr>
+      <tr><td>"Research best practices for rotating cloud access keys and give me a 5-step checklist."</td><td>Multi-step research with a summary</td><td>none</td></tr>
+      <tr><td>"Search my Cairn index for the Northwind return policy."</td><td><code>web_research</code> / <code>mcp__cairn__search_index</code></td><td>none</td></tr>
+      <tr><td>"Crawl docs.example.com (20 pages) and tell me how their API authenticates."</td><td><code>mcp__cairn__crawl_site</code>, then search</td><td>crawl needs approval</td></tr>
+      <tr><td>"Compare three popular open-source vector databases on licence, scale and hosting."</td><td>Research plus a comparison table</td><td>none</td></tr>
+    </table>
+
+    <h3>Shopping</h3>
+    <table>
+      <tr><th>Prompt</th><th>What Cairn does</th><th>Approval</th></tr>
+      <tr><td>"Shop for a quiet cordless stick vacuum under $250 for a small apartment."</td><td>Clarifying questions if needed, research, then a comparison table</td><td>none</td></tr>
+      <tr><td>"Find a 27-inch 4K USB-C monitor with 65 W charging; compare 5 options in a table."</td><td>Table of product, store, price, rating and link</td><td>none</td></tr>
+      <tr><td>"Add the best-value one to my shopping list."</td><td><code>shopping_list_add</code></td><td>none</td></tr>
+      <tr><td>"Open the product page for option 2 and add it to my cart. I'll check out myself."</td><td>Browser navigate, then <code>browser_click</code>, then <code>open_url</code> to the checkout page</td><td>click needs approval</td></tr>
+      <tr><td>"Gift ideas under $40 for a 10-year-old who loves space."</td><td>Curated list with links</td><td>none</td></tr>
+    </table>
+
+    <h3>Computer tasks</h3>
+    <table>
+      <tr><th>Prompt</th><th>What Cairn does</th><th>Approval</th></tr>
+      <tr><td>"Organize my Downloads folder into subfolders by file type."</td><td><code>Glob</code> to inspect, then <code>Bash</code> <code>mkdir</code>/<code>mv</code></td><td>each command</td></tr>
+      <tr><td>"Find PDFs on my Desktop bigger than 20 MB."</td><td><code>Glob</code>, or a <code>find</code> command via <code>Bash</code></td><td>none, or one approval</td></tr>
+      <tr><td>"How much disk space is left, and what are my 10 largest folders?"</td><td><code>df</code> and <code>du</code> via <code>Bash</code></td><td>one approval</td></tr>
+      <tr><td>"Convert the .heic photos in ~/Pictures/Import to .jpg."</td><td><code>sips</code> via <code>Bash</code></td><td>approval</td></tr>
+      <tr><td>"Open Notes and Music."</td><td><code>open_app</code> twice</td><td>none</td></tr>
+      <tr><td>"Summarise this conversation and copy it to my clipboard."</td><td><code>clipboard_write</code></td><td>none</td></tr>
+      <tr><td>"Write a README.md for ~/projects/demo based on its files."</td><td><code>Read</code>/<code>Glob</code>, then <code>Write</code></td><td>the write</td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="limits">17. Limits and honest differences</h2>
+    <ul>
+      <li><strong>Local, not cloud.</strong> ChatGPT Agent and Grok Bot work on vendor VMs that keep running when your laptop is closed. Cairn runs on your Mac. While the Mac is asleep, nothing runs. Overdue one-shot reminders fire once on wake, and recurring tasks skip the runs they missed.</li>
+      <li><strong>Server restarts interrupt runs.</strong> In-flight runs are marked <code>error: interrupted</code> in <code>runs.json</code>. The desktop watchdog restarts a crashed server it started, but it does not resume the interrupted runs.</li>
+      <li><strong>Your real computer.</strong> Approved commands act on your real files. There is no sandbox VM. Keep <code>workDir</code> reasonable, and read approval summaries.</li>
+      <li><strong>Browser sign-in.</strong> The Playwright browser uses its own profile, not your everyday browser. Sign in there yourself when a site needs it. Cairn does not store your passwords.</li>
+      <li><strong>No cloud connectors, no teach-a-task, and no cross-conversation memory</strong> yet.</li>
+      <li><strong>Costs.</strong> Each run uses your Claude plan or credits. The cost appears in the Activity tab and is capped by <code>maxBudgetUsd</code>.</li>
+      <li><strong>Accuracy.</strong> Prices, stock and search results can be out of date or wrong, as vendors themselves warn. Cairn links every source so you can check.</li>
+      <li><strong>Honest identity.</strong> Pages fetched through the <code>cairn</code> tools use Cairn's declared user agent and respect robots.txt. Browser automation is a real browser that you control and watch. Cairn does not evade bot detection or CAPTCHAs.</li>
+    </ul>
+
+    <!-- ============================================================== -->
+    <h2 id="sources">18. Research sources</h2>
+    <ul>
+      <li>OpenAI, <a href="https://openai.com/index/introducing-chatgpt-agent/">Introducing ChatGPT agent: bridging research and action</a> (July 2025), plus coverage by <a href="https://www.techtarget.com/whatis/feature/ChatGPT-agents-explained">TechTarget</a> and <a href="https://www.creolestudios.com/how-to-use-openai-chatgpt-agent/">Creole Studios</a> (watch mode, takeover, confirmations).</li>
+      <li>TechCrunch, <a href="https://techcrunch.com/2025/01/14/chatgpt-now-lets-you-schedule-reminders-and-recurring-tasks">ChatGPT now lets you schedule reminders and recurring tasks</a> (14 January 2025).</li>
+      <li>OpenAI, <a href="https://openai.com/index/chatgpt-shopping-research/">Introducing shopping research in ChatGPT</a> (24 November 2025). TechCrunch, <a href="https://techcrunch.com/2025/09/29/openai-takes-on-google-amazon-with-new-agentic-shopping-system/">OpenAI takes on Google, Amazon with new agentic shopping system</a> (Instant Checkout, 29 September 2025). Forbes, <a href="https://www.forbes.com/sites/jasongoldberg/2026/03/10/why-openais-checkout-retreat-spells-trouble-for-its-commerce-strategy/">Why OpenAI's checkout retreat spells trouble</a> (March 2026).</li>
+      <li>xAI on X, <a href="https://x.com/xai/status/1892400134178164775">DeepSearch and Think with Grok 3</a> (February 2025). <a href="https://www.eonmsk.com/2025/06/22/how-to-create-xai-grok-tasks/">How to create xAI Grok tasks</a> (June 2025).</li>
+      <li>Interesting Engineering, <a href="https://interestingengineering.com/ai-robotics/xai-grok-bot-computer-agent">Grok Bot is xAI's new 24/7 coworker</a> (August 2026). <a href="https://www.digitalapplied.com/blog/grok-bot-ai-teammates-launch-cloud-computer-2026">Digital Applied: Grok Bot gets its own computer</a>.</li>
+      <li>Anthropic, <a href="https://claude.com/blog/claude-for-chrome">Claude for Chrome</a> and <a href="https://support.claude.com/en/articles/12902446-claude-in-chrome-permissions-guide">Claude in Chrome permissions guide</a>.</li>
+    </ul>
+    <p>Vendor features change quickly. The dates and figures above were checked in September 2026.</p>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

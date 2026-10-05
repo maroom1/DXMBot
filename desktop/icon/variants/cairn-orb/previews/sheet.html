@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cairn icon - preview sheet (Cairn in the Orb)</title>
+<style>
+  html, body { margin: 0; background: #888; font: 13px -apple-system, "SF Pro Text", Helvetica, sans-serif; }
+  body { width: 1400px; height: 1180px; display: grid; grid-template-rows: 1fr 1fr; }
+  .band { display: flex; align-items: center; gap: 36px; padding: 0 40px; box-sizing: border-box; }
+  .light { background: #ececec; color: #333; }
+  .dark  { background: #1e1e1e; color: #ccc; }
+  .big { width: 512px; height: 512px; flex: none; margin-top: 30px; }
+  .col { display: flex; flex-direction: column; gap: 26px; }
+  .dock { display: flex; align-items: flex-end; gap: 10px; padding: 8px 14px; border-radius: 26px; }
+  .light .dock { background: rgba(255,255,255,0.55); box-shadow: 0 0 0 1px rgba(0,0,0,0.08), 0 8px 30px rgba(0,0,0,0.12); }
+  .dark  .dock { background: rgba(60,60,60,0.55); box-shadow: 0 0 0 1px rgba(255,255,255,0.10), 0 8px 30px rgba(0,0,0,0.5); }
+  .nb { position: relative; }
+  .nb::before { content: ""; position: absolute; inset: 9.77%; border-radius: 22.4%; box-shadow: 0 2px 4px rgba(0,0,0,0.25); }
+  .n1::before { background: linear-gradient(#f7f7f7, #d6d6d6); }
+  .n2::before { background: linear-gradient(#5ac8fa, #0a7aff); }
+  .n3::before { background: linear-gradient(#ff9f0a, #ff375f); }
+  .n4::before { background: linear-gradient(#3a3a3c, #1c1c1e); }
+  .s128 { width: 128px; height: 128px; } .s64 { width: 64px; height: 64px; }
+  .s32 { width: 32px; height: 32px; } .s16 { width: 16px; height: 16px; }
+  img { display: block; }
+  .row { display: flex; align-items: center; gap: 14px; }
+  .finder { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-radius: 10px; }
+  .light .finder { background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.08); }
+  .dark .finder { background: #2a2a2a; box-shadow: 0 0 0 1px rgba(255,255,255,0.08); }
+  .label { opacity: 0.6; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="band light">
+    <img class="big" src="icon-512.png">
+    <div class="col">
+      <div class="label">Dock 128</div>
+      <div class="dock">
+        <div class="nb n1 s128"></div><div class="nb n2 s128"></div><img class="s128" src="icon-128.png"><div class="nb n3 s128"></div>
+      </div>
+      <div class="label">Dock 64</div>
+      <div class="dock">
+        <div class="nb n4 s64"></div><div class="nb n2 s64"></div><img class="s64" src="icon-64.png"><div class="nb n1 s64"></div><div class="nb n3 s64"></div>
+      </div>
+      <div class="label">Finder list 32 / 16</div>
+      <div class="finder">
+        <div class="row"><img class="s32" src="icon-32.png"><span>Cairn.app</span><div class="nb n1 s32"></div><span>Notes.app</span></div>
+        <div class="row"><img class="s16" src="icon-16.png"><span>Cairn.app</span><div class="nb n2 s16"></div><span>Safari.app</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="band dark">
+    <img class="big" src="icon-512.png">
+    <div class="col">
+      <div class="label">Dock 128</div>
+      <div class="dock">
+        <div class="nb n4 s128"></div><div class="nb n2 s128"></div><img class="s128" src="icon-128.png"><div class="nb n3 s128"></div>
+      </div>
+      <div class="label">Dock 64</div>
+      <div class="dock">
+        <div class="nb n1 s64"></div><div class="nb n2 s64"></div><img class="s64" src="icon-64.png"><div class="nb n4 s64"></div><div class="nb n3 s64"></div>
+      </div>
+      <div class="label">Finder list 32 / 16</div>
+      <div class="finder">
+        <div class="row"><img class="s32" src="icon-32.png"><span>Cairn.app</span><div class="nb n4 s32"></div><span>Terminal.app</span></div>
+        <div class="row"><img class="s16" src="icon-16.png"><span>Cairn.app</span><div class="nb n2 s16"></div><span>Safari.app</span></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cairn app icon: Liquid Glass</title>
+<!--
+  Cairn macOS app icon, "Liquid Glass" variant.
+  1024x1024 canvas, transparent outside the body. Body is a superellipse (n = 5) squircle,
+  824 x 824 centred (100 px margin, corner ~185 px equivalent), with a soft drop shadow inside the canvas.
+  Layers: frosted light glass body + diffuse aurora bloom + specular edge -> raised glass lens bezel ->
+  aurora orb (WebGL shader copied from web/avatars/avatar-aurora.html, 2D fallback) -> backlit cairn
+  of three stacked stones -> lens gloss.
+  Hash params: #t=<flow time>  #renderer=2d
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body { width: 1024px; height: 1024px; }
+  canvas { display: block; width: 1024px; height: 1024px; }
+</style>
+</head>
+<body>
+<canvas id="icon" width="1024" height="1024"></canvas>
+<script>
+(function () {
+  'use strict';
+  var S = 1024;
+  var q = {};
+  (location.hash || '').replace(/^#/, '').split('&').forEach(function (kv) {
+    if (!kv) return; var i = kv.indexOf('=');
+    q[i < 0 ? kv : kv.slice(0, i)] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+  });
+  var FLOW_T = isFinite(parseFloat(q.t)) ? parseFloat(q.t) : 17.3;
+
+  var cv = document.getElementById('icon');
+  var ctx = cv.getContext('2d');
+  var TAU = Math.PI * 2;
+
+  // ------------------------------------------------------------ geometry
+  var CX = 512, CY = 512, HALF = 412;          // body 824 x 824
+  var ORB_CX = 512, ORB_CY = 512, ORB_R = 282;  // aurora lens
+  var BEZEL = 20;                                // glass ring around the lens
+
+  function squircle(c, cx, cy, a, n) {
+    n = n || 4.6;
+    var N = 720;
+    c.beginPath();
+    for (var i = 0; i <= N; i++) {
+      var t = i / N * TAU, ct = Math.cos(t), st = Math.sin(t);
+      var x = cx + a * Math.sign(ct) * Math.pow(Math.abs(ct), 2 / n);
+      var y = cy + a * Math.sign(st) * Math.pow(Math.abs(st), 2 / n);
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.closePath();
+  }
+  function circle(c, x, y, r) { c.beginPath(); c.arc(x, y, r, 0, TAU); c.closePath(); }
+  function layer() { var l = document.createElement('canvas'); l.width = l.height = S; return l; }
+
+  // ------------------------------------------------------------ aurora orb (WebGL)
+  var VS = 'attribute vec2 aPos; void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }';
+  var FS = [
+    'precision highp float;',
+    'uniform vec2 uRes; uniform float uTime;',
+    'uniform vec3 uC0, uC1, uC2, uC3;',
+    'vec3 mod289(vec3 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 mod289(vec4 x){return x - floor(x*(1.0/289.0))*289.0;}',
+    'vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}',
+    'vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314*r;}',
+    'float snoise(vec3 v){',
+    '  const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);',
+    '  vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx);',
+    '  vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g;',
+    '  vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy);',
+    '  vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy;',
+    '  i = mod289(i);',
+    '  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));',
+    '  float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx;',
+    '  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);',
+    '  vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_);',
+    '  vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y);',
+    '  vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw);',
+    '  vec4 s0 = floor(b0)*2.0 + 1.0; vec4 s1 = floor(b1)*2.0 + 1.0; vec4 sh = -step(h, vec4(0.0));',
+    '  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;',
+    '  vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w);',
+    '  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));',
+    '  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;',
+    '  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m * m;',
+    '  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));',
+    '}',
+    'float fbm(vec3 p){ float s = 0.0, a = 0.5;',
+    '  for (int i = 0; i < 4; i++){ s += a * snoise(p); p = p * 1.97 + vec3(3.1, 1.7, 5.3); a *= 0.42; }',
+    '  return s; }',
+    'float fbm2(vec3 p){ return 0.5 * snoise(p) + 0.25 * snoise(p * 2.03 + vec3(3.1, 1.7, 5.3)); }',
+    'mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }',
+    'void main(){',
+    '  vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * uRes.x);',
+    '  float r = length(p);',
+    '  float t = uTime;',
+    '  float rc = min(r, 0.999);',
+    '  float z = sqrt(1.0 - rc * rc);',
+    '  vec3 n = vec3(p * (rc / max(r, 1e-4)), z);',
+    '  vec3 q = n;',
+    '  q.xz = rot(t * 0.10) * q.xz;',
+    '  q.yz = rot(0.35 + 0.06 * sin(t * 0.07)) * q.yz;',
+    '  vec3 w = vec3(snoise(q * 0.7 + vec3(0.0, 0.0, t * 0.12)),',
+    '                snoise(q * 0.7 + vec3(4.7, 2.3, -t * 0.10)),',
+    '                snoise(q * 0.7 + vec3(1.9, 7.1, t * 0.09)));',
+    '  vec3 qw = q * 0.95 + w * 0.48;',
+    '  float fA = fbm(qw + vec3(0.0, t * 0.06, 0.0));',
+    '  vec3 qd = vec3(n.xy * 0.70, -z * 0.45);',
+    '  qd.xz = rot(-t * 0.07) * qd.xz;',
+    '  float fB = fbm2(qd * 1.25 + w * 0.32 + vec3(t * 0.05, 0.0, 3.0));',
+    '  float diag = dot(n.xy, vec2(-0.55, 0.83)) * 0.5 + 0.5;',
+    '  vec3 col = mix(uC0, uC2, smoothstep(-0.40, 0.45, fB * 1.3 + (0.5 - diag) * 0.25));',
+    '  col = mix(col, uC1, smoothstep(-0.30, 0.55, fA * 1.1 + (diag - 0.5) * 0.9) * 0.9);',
+    '  float cloud = smoothstep(-0.02, 0.66, fA * 0.9 + fB * 0.35 + (diag - 0.5) * 0.50);',
+    '  col = mix(col, uC3, pow(cloud, 1.6) * 0.70);',
+    '  col *= 0.84 + 0.28 * diag;',
+    '  float fres = pow(1.0 - z, 2.4);',
+    '  vec3 rimCol = mix(uC1, uC3, 0.45);',
+    '  col = mix(col, rimCol, fres * 0.50);',
+    '  col += rimCol * pow(1.0 - z, 8.0) * 0.30;',
+    '  float cy = p.y + 0.80;',
+    '  float caust = exp(-(p.x * p.x * 2.4 + cy * cy * 12.0));',
+    '  col += mix(uC1, uC3, 0.55) * caust * 0.30;',
+    '  float a = 1.0 - smoothstep(1.0 - 2.0 / (0.5 * uRes.x), 1.0, r);',
+    '  gl_FragColor = vec4(clamp(col, 0.0, 1.0) * a, a);',
+    '}'
+  ].join('\n');
+
+  var C0 = [0.08, 0.16, 0.68], C1 = [0.20, 0.78, 1.00], C2 = [0.62, 0.36, 1.00], C3 = [0.93, 0.97, 1.00];
+
+  function orbGL(size) {
+    var c = document.createElement('canvas'); c.width = c.height = size;
+    if (q.renderer === '2d') return null;
+    var gl = c.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true });
+    if (!gl) return null;
+    function sh(type, src) {
+      var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    try {
+      var pr = gl.createProgram();
+      gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+      gl.useProgram(pr);
+      var b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(pr, 'aPos'); gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      gl.viewport(0, 0, size, size);
+      gl.uniform2f(gl.getUniformLocation(pr, 'uRes'), size, size);
+      gl.uniform1f(gl.getUniformLocation(pr, 'uTime'), FLOW_T);
+      gl.uniform3fv(gl.getUniformLocation(pr, 'uC0'), C0); gl.uniform3fv(gl.getUniformLocation(pr, 'uC1'), C1);
+      gl.uniform3fv(gl.getUniformLocation(pr, 'uC2'), C2); gl.uniform3fv(gl.getUniformLocation(pr, 'uC3'), C3);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.finish();
+    } catch (e) { console.warn('webgl failed', e); return null; }
+    window.__renderer = 'webgl';
+    return c;
+  }
+
+  function rgb(c, a) { return 'rgba(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ',' + a + ')'; }
+
+  function orb2D(size) {
+    var c = document.createElement('canvas'); c.width = c.height = size;
+    var x = c.getContext('2d'), R = size / 2;
+    x.save(); circle(x, R, R, R); x.clip();
+    var base = x.createLinearGradient(0, 0, 0, size);
+    base.addColorStop(0, rgb([0.20, 0.50, 0.95], 1)); base.addColorStop(0.55, rgb([0.30, 0.28, 0.85], 1)); base.addColorStop(1, rgb(C0, 1));
+    x.fillStyle = base; x.fillRect(0, 0, size, size);
+    x.globalCompositeOperation = 'screen';
+    [[C1, 0.30, 0.35, 0.60, 0.55], [C3, 0.40, 0.28, 0.42, 0.45], [C2, 0.72, 0.62, 0.50, 0.50], [C1, 0.62, 0.30, 0.40, 0.40]].forEach(function (b) {
+      var g = x.createRadialGradient(b[1] * size, b[2] * size, 0, b[1] * size, b[2] * size, b[3] * size);
+      g.addColorStop(0, rgb(b[0], b[4])); g.addColorStop(1, rgb(b[0], 0));
+      x.fillStyle = g; x.fillRect(0, 0, size, size);
+    });
+    x.globalCompositeOperation = 'source-over';
+    var rim = x.createRadialGradient(R, R, R * 0.62, R, R, R);
+    rim.addColorStop(0, rgb(C3, 0)); rim.addColorStop(1, rgb([0.6, 0.85, 1], 0.55));
+    x.fillStyle = rim; x.fillRect(0, 0, size, size);
+    x.restore();
+    window.__renderer = '2d';
+    return c;
+  }
+
+  // ------------------------------------------------------------ stones
+  // A pebble: superellipse-ish blob, flatter underside, slight lean.
+  function pebble(c, cx, cy, rx, ry, rotDeg, flat, skew) {
+    var N = 160, rot = rotDeg * Math.PI / 180, cr = Math.cos(rot), sr = Math.sin(rot);
+    c.beginPath();
+    for (var i = 0; i <= N; i++) {
+      var t = i / N * TAU, ct = Math.cos(t), st = Math.sin(t);
+      var e = 2 / 2.35;
+      var x = rx * Math.sign(ct) * Math.pow(Math.abs(ct), e);
+      var y = ry * Math.sign(st) * Math.pow(Math.abs(st), st > 0 ? e * 1.25 : e * 0.92);
+      if (st > 0) y *= flat;            // canvas y down: st > 0 is the underside
+      x += skew * y;
+      var X = cx + x * cr - y * sr, Y = cy + x * sr + y * cr;
+      if (i === 0) c.moveTo(X, Y); else c.lineTo(X, Y);
+    }
+    c.closePath();
+  }
+
+  var STONES = [ // cx, cy, rx, ry, rot, flat, skew   (relative to orb centre, in px at 1024)
+    [  4,  84, 120, 47, -3.0, 0.78, 0.06],
+    [ -7,   8,  86, 41,  5.0, 0.80, -0.08],
+    [  6, -62,  55, 38, -8.0, 0.82, 0.05]
+  ];
+
+  function stonePath(c, s, dx, dy) { pebble(c, ORB_CX + s[0] + (dx || 0), ORB_CY + s[1] + (dy || 0), s[2], s[3], s[4], s[5], s[6]); }
+
+  // ------------------------------------------------------------ paint
+  function paint() {
+    ctx.clearRect(0, 0, S, S);
+
+    // 1. drop shadow (two-stage: ambient + contact)
+    ctx.save();
+    squircle(ctx, CX, CY + 2, HALF - 2);
+    ctx.shadowColor = 'rgba(10, 20, 60, 0.28)'; ctx.shadowBlur = 34; ctx.shadowOffsetY = 14;
+    ctx.fillStyle = '#dfe5f3'; ctx.fill();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.22)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
+    ctx.fill();
+    ctx.restore();
+
+    // 2. body: frosted light glass
+    ctx.save();
+    squircle(ctx, CX, CY, HALF); ctx.clip();
+    var g = ctx.createLinearGradient(0, 100, 0, 924);
+    g.addColorStop(0, '#fdfeff'); g.addColorStop(0.45, '#eef2fc'); g.addColorStop(1, '#d6def3');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+
+    // diffuse aurora light bleeding through frosted glass
+    var blobs = [
+      [300, 260, 420, [0.45, 0.85, 1.00], 0.30],
+      [760, 790, 460, [0.62, 0.50, 1.00], 0.34],
+      [800, 260, 300, [0.80, 0.70, 1.00], 0.18],
+      [250, 820, 300, [0.40, 0.70, 1.00], 0.20],
+      [512, 512, 420, [0.42, 0.62, 1.00], 0.30]
+    ];
+    blobs.forEach(function (b) {
+      var rg = ctx.createRadialGradient(b[0], b[1], 0, b[0], b[1], b[2]);
+      rg.addColorStop(0, rgb(b[3], b[4])); rg.addColorStop(1, rgb(b[3], 0));
+      ctx.fillStyle = rg; ctx.fillRect(0, 0, S, S);
+    });
+
+    // frosted top sheen: brighter upper half, like light falling on glass
+    var sheen = ctx.createLinearGradient(0, 100, 0, 600);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.55)'); sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheen; ctx.fillRect(0, 0, S, S);
+
+    // inner edge depth: faint darker band along the lower inside edge
+    ctx.save();
+    var inner = layer(), ic = inner.getContext('2d');
+    squircle(ic, CX, CY, HALF); ic.fillStyle = 'rgba(70, 80, 150, 1)'; ic.fill();
+    ic.globalCompositeOperation = 'destination-out';
+    ic.filter = 'blur(10px)';
+    squircle(ic, CX, CY - 10, HALF - 16); ic.fill();
+    ctx.globalAlpha = 0.20; ctx.drawImage(inner, 0, 0);
+    ctx.restore();
+
+    // specular rim: bright glass edge strongest top-left and bottom-right
+    ctx.save();
+    var rimL = layer(), rc = rimL.getContext('2d');
+    squircle(rc, CX, CY, HALF);
+    var cg = rc.createConicGradient(-Math.PI / 2, CX, CY);
+    cg.addColorStop(0.00, 'rgba(255,255,255,0.95)');
+    cg.addColorStop(0.10, 'rgba(255,255,255,0.35)');
+    cg.addColorStop(0.25, 'rgba(255,255,255,0.15)');
+    cg.addColorStop(0.375, 'rgba(255,255,255,0.75)');
+    cg.addColorStop(0.50, 'rgba(255,255,255,0.25)');
+    cg.addColorStop(0.62, 'rgba(255,255,255,0.15)');
+    cg.addColorStop(0.80, 'rgba(255,255,255,0.40)');
+    cg.addColorStop(0.875, 'rgba(255,255,255,1.0)');
+    cg.addColorStop(1.00, 'rgba(255,255,255,0.95)');
+    rc.lineWidth = 7; rc.strokeStyle = cg; rc.stroke();
+    rc.filter = 'blur(8px)'; rc.lineWidth = 22; rc.globalAlpha = 0.55; rc.stroke(); rc.filter = 'none'; rc.globalAlpha = 1;
+    ctx.drawImage(rimL, 0, 0);
+    ctx.restore();
+    ctx.restore(); // body clip
+
+    // hairline so a white body still holds an edge on light backgrounds
+    ctx.save();
+    squircle(ctx, CX, CY, HALF - 0.5);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(40, 50, 110, 0.16)'; ctx.stroke();
+    ctx.restore();
+
+    // 3. lens: aurora glow spilling into the frosted glass + raised clear-glass bezel
+    var RB = ORB_R + BEZEL;
+    ctx.save();
+    squircle(ctx, CX, CY, HALF); ctx.clip();
+    var glow = ctx.createRadialGradient(ORB_CX, ORB_CY, RB * 0.9, ORB_CX, ORB_CY, RB * 1.45);
+    glow.addColorStop(0, 'rgba(70, 130, 255, 0.42)'); glow.addColorStop(0.5, 'rgba(120, 100, 255, 0.14)'); glow.addColorStop(1, 'rgba(120, 100, 255, 0)');
+    ctx.fillStyle = glow; ctx.fillRect(0, 0, S, S);
+    circle(ctx, ORB_CX, ORB_CY, RB);
+    ctx.shadowColor = 'rgba(30, 40, 130, 0.32)'; ctx.shadowBlur = 44; ctx.shadowOffsetY = 20;
+    ctx.fillStyle = '#eef2fb'; ctx.fill();
+    ctx.shadowColor = 'rgba(20, 30, 100, 0.16)'; ctx.shadowBlur = 5; ctx.shadowOffsetY = 2;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    squircle(ctx, CX, CY, HALF); ctx.clip();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.translate(ORB_CX + 18, ORB_CY + RB + 6); ctx.scale(1.9, 0.55);
+    var cau = ctx.createRadialGradient(0, 0, 0, 0, 0, 120);
+    cau.addColorStop(0, 'rgba(140, 220, 255, 0.55)'); cau.addColorStop(0.5, 'rgba(150, 140, 255, 0.22)'); cau.addColorStop(1, 'rgba(150, 140, 255, 0)');
+    ctx.fillStyle = cau; ctx.fillRect(-300, -300, 600, 600);
+    ctx.restore();
+
+    // bezel: thick clear glass ring, light top-left, tinted by the orb at the bottom-right
+    ctx.save();
+    circle(ctx, ORB_CX, ORB_CY, RB); ctx.clip();
+    var bz = ctx.createLinearGradient(ORB_CX - RB * 0.7, ORB_CY - RB * 0.7, ORB_CX + RB * 0.7, ORB_CY + RB * 0.7);
+    bz.addColorStop(0, '#ffffff'); bz.addColorStop(0.5, '#e6ebfb'); bz.addColorStop(1, '#bfc9f2');
+    ctx.fillStyle = bz; ctx.fillRect(0, 0, S, S);
+    // the orb's light refracted into the ring
+    var rr = ctx.createRadialGradient(ORB_CX, ORB_CY, ORB_R, ORB_CX, ORB_CY, RB);
+    rr.addColorStop(0, 'rgba(110, 170, 255, 0.55)'); rr.addColorStop(1, 'rgba(110, 170, 255, 0)');
+    ctx.fillStyle = rr; ctx.fillRect(0, 0, S, S);
+    // specular arcs on the outer edge
+    var bc = ctx.createConicGradient(-Math.PI / 2, ORB_CX, ORB_CY);
+    bc.addColorStop(0.00, 'rgba(255,255,255,0.25)');
+    bc.addColorStop(0.20, 'rgba(255,255,255,0.0)');
+    bc.addColorStop(0.375, 'rgba(255,255,255,0.85)');
+    bc.addColorStop(0.55, 'rgba(255,255,255,0.0)');
+    bc.addColorStop(0.75, 'rgba(255,255,255,0.0)');
+    bc.addColorStop(0.875, 'rgba(255,255,255,1.0)');
+    bc.addColorStop(1.0, 'rgba(255,255,255,0.25)');
+    circle(ctx, ORB_CX, ORB_CY, RB - 3); ctx.lineWidth = 5; ctx.strokeStyle = bc; ctx.stroke();
+    ctx.restore();
+
+    // 4. aurora orb
+    var size = ORB_R * 2;
+    var orb = orbGL(size) || orb2D(size);
+    ctx.save();
+    circle(ctx, ORB_CX, ORB_CY, ORB_R); ctx.clip();
+    ctx.drawImage(orb, ORB_CX - ORB_R, ORB_CY - ORB_R, size, size);
+
+    // luminous core behind the cairn so the stones read as a backlit silhouette
+    ctx.globalCompositeOperation = 'screen';
+    ctx.save();
+    ctx.translate(ORB_CX, ORB_CY + 18); ctx.scale(1.08, 1);
+    var core = ctx.createRadialGradient(0, 0, 0, 0, 0, ORB_R * 0.95);
+    core.addColorStop(0, 'rgba(225, 250, 255, 1)'); core.addColorStop(0.40, 'rgba(160, 228, 255, 0.72)');
+    core.addColorStop(0.66, 'rgba(100, 170, 255, 0.24)'); core.addColorStop(1, 'rgba(90, 120, 255, 0)');
+    ctx.fillStyle = core; ctx.fillRect(-S, -S, 2 * S, 2 * S);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 5. cairn: halo, silhouette with form, rim light; drawn bottom to top
+    var halo = layer(), hc = halo.getContext('2d');
+    hc.filter = 'blur(26px)';
+    hc.fillStyle = hc.strokeStyle = 'rgba(240, 253, 255, 1)'; hc.lineWidth = 24; hc.lineJoin = 'round';
+    STONES.forEach(function (s) { stonePath(hc, s); hc.fill(); hc.stroke(); });
+    ctx.globalAlpha = 0.85; ctx.globalCompositeOperation = 'screen'; ctx.drawImage(halo, 0, 0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+
+    STONES.forEach(function (s, i) {
+      var scx = ORB_CX + s[0], scy = ORB_CY + s[1];
+      // contact shadow cast on the stone below
+      if (i > 0) {
+        ctx.save();
+        stonePath(ctx, s, 0, 6);
+        ctx.filter = 'blur(6px)'; ctx.fillStyle = 'rgba(4, 6, 30, 0.6)'; ctx.fill();
+        ctx.restore();
+      }
+      stonePath(ctx, s);
+      var sg = ctx.createRadialGradient(scx - s[2] * 0.35, scy - s[3] * 0.9, 0, scx, scy, s[2] * 1.15);
+      sg.addColorStop(0, '#3442a8'); sg.addColorStop(0.42, '#161c5e'); sg.addColorStop(1, '#070928');
+      ctx.fillStyle = sg; ctx.fill();
+      // rim light on the top edge: stone minus a lowered copy
+      var rl = layer(), r2 = rl.getContext('2d');
+      stonePath(r2, s);
+      var rg = r2.createLinearGradient(scx - s[2], 0, scx + s[2], 0);
+      rg.addColorStop(0, 'rgba(150, 225, 255, 0.5)'); rg.addColorStop(0.38, 'rgba(235, 252, 255, 1)'); rg.addColorStop(1, 'rgba(180, 190, 255, 0.55)');
+      r2.fillStyle = rg; r2.fill();
+      var lo = layer(), lc = lo.getContext('2d');
+      lc.filter = 'blur(1.5px)'; lc.fillStyle = '#000';
+      stonePath(lc, s, 1, 4.5); lc.fill();
+      r2.globalCompositeOperation = 'destination-out';
+      r2.drawImage(lo, 0, 0);
+      if (q.dbg !== 'norim') { ctx.globalAlpha = 0.9; ctx.drawImage(rl, 0, 0); ctx.globalAlpha = 1; }
+    });
+
+    // bezel casts a soft inner shadow onto the top of the lens
+    var ish = layer(), isc = ish.getContext('2d');
+    isc.fillStyle = 'rgba(10, 20, 80, 1)'; isc.fillRect(0, 0, S, S);
+    isc.globalCompositeOperation = 'destination-out'; isc.filter = 'blur(14px)';
+    circle(isc, ORB_CX, ORB_CY + 12, ORB_R - 4); isc.fill();
+    if (q.dbg !== 'noish') { ctx.globalAlpha = 0.45; ctx.drawImage(ish, 0, 0); ctx.globalAlpha = 1; }
+    ctx.restore(); // orb clip
+
+    // 6. lens gloss
+    ctx.save();
+    circle(ctx, ORB_CX, ORB_CY, ORB_R); ctx.clip();
+    ctx.save();
+    ctx.translate(ORB_CX, ORB_CY - ORB_R * 0.56);
+    ctx.scale(1, 0.52);
+    var dome = ctx.createRadialGradient(0, -ORB_R * 0.3, 0, 0, 0, ORB_R * 0.82);
+    dome.addColorStop(0, 'rgba(255,255,255,0.50)'); dome.addColorStop(0.55, 'rgba(255,255,255,0.14)'); dome.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = dome; circle(ctx, 0, 0, ORB_R * 0.82); ctx.fill();
+    ctx.restore();
+    var sx = ORB_CX - ORB_R * 0.46, sy = ORB_CY - ORB_R * 0.50;
+    var sp = ctx.createRadialGradient(sx, sy, 0, sx, sy, 30);
+    sp.addColorStop(0, 'rgba(255,255,255,1)'); sp.addColorStop(0.3, 'rgba(255,255,255,0.5)'); sp.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sp; ctx.fillRect(sx - 40, sy - 40, 80, 80);
+    // bright refracted edge, strongest bottom-right (light passing through the lens)
+    var le = ctx.createConicGradient(-Math.PI / 2, ORB_CX, ORB_CY);
+    le.addColorStop(0, 'rgba(200,235,255,0.15)'); le.addColorStop(0.375, 'rgba(200,240,255,0.85)');
+    le.addColorStop(0.62, 'rgba(200,235,255,0.15)'); le.addColorStop(1, 'rgba(200,235,255,0.15)');
+    circle(ctx, ORB_CX, ORB_CY, ORB_R - 2); ctx.lineWidth = 4; ctx.strokeStyle = le; ctx.stroke();
+    ctx.restore();
+
+    document.title = 'ready:' + window.__renderer;
+  }
+
+  paint();
+})();
+</script>
+</body>
+</html>

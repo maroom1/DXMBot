@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cairn app icon - Cairn in the Orb</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { width: 1024px; height: 1024px; overflow: hidden; }
+  svg { display: block; width: 1024px; height: 1024px; }
+</style>
+</head>
+<body>
+<svg id="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"></svg>
+<script>
+(function () {
+  'use strict';
+  var NS = 'http://www.w3.org/2000/svg';
+  var svg = document.getElementById('icon');
+  var f = function (v) { return (Math.round(v * 100) / 100).toString(); };
+
+  // ---------- Apple grid: 824x824 continuous-corner body, centred (100 px margin) ----------
+  // Superellipse |x|^n + |y|^n = 1 with n = 5 matches a 185 px corner at 45 degrees on an 824 body.
+  function superellipse(cx, cy, a, n, N) {
+    var d = '';
+    for (var i = 0; i < N; i++) {
+      var t = (i / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      var x = cx + a * Math.sign(c) * Math.pow(Math.abs(c), 2 / n);
+      var y = cy + a * Math.sign(s) * Math.pow(Math.abs(s), 2 / n);
+      d += (i ? 'L' : 'M') + f(x) + ' ' + f(y);
+    }
+    return d + 'Z';
+  }
+
+  // ---------- pebble: rounder dome on top, flatter resting base, slight lean ----------
+  function pebble(p) {
+    var N = 240, d = '', rot = p.tilt * Math.PI / 180, cr = Math.cos(rot), sr = Math.sin(rot);
+    for (var i = 0; i < N; i++) {
+      var t = (i / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      var top = s < 0, n = top ? p.nTop : p.nBot, h = top ? p.hTop : p.hBot;
+      var x = (p.w / 2) * Math.sign(c) * Math.pow(Math.abs(c), 2 / n);
+      var y = h * Math.sign(s) * Math.pow(Math.abs(s), 2 / n);
+      x *= 1 + p.asym * Math.sign(c) * 0.06;            // one end a touch fuller
+      x += p.lean * y;
+      var X = p.cx + x * cr - y * sr, Y = p.cy + x * sr + y * cr;
+      d += (i ? 'L' : 'M') + f(X) + ' ' + f(Y);
+    }
+    return d + 'Z';
+  }
+
+  // Stack (bottom -> top). Each stone rests a little into the one below.
+  var stones = [
+    { cx: 510, cy: 676, w: 452, hTop: 100, hBot: 74, nTop: 2.15, nBot: 2.9, tilt: -2.0, lean: 0.0, asym: 1,
+      tTop: '#f6f4ff', tMid: '#c3bcff', tBot: '#7a5cf0', rim: '#e0d4ff', caustic: '#efe6ff', deep: '#4a2fd0' },
+    { cx: 522, cy: 529, w: 334, hTop: 84, hBot: 62, nTop: 2.15, nBot: 2.8, tilt: 3.5, lean: 0.0, asym: -1,
+      tTop: '#ffffff', tMid: '#c6dbff', tBot: '#5d7ff4', rim: '#d6ecff', caustic: '#dcefff', deep: '#3349e0' },
+    { cx: 504, cy: 397, w: 226, hTop: 70, hBot: 52, nTop: 2.1, nBot: 2.7, tilt: -5.0, lean: 0.0, asym: 1,
+      tTop: '#ffffff', tMid: '#d2f6ff', tBot: '#42b4ff', rim: '#e6fbff', caustic: '#d4fbff', deep: '#1f7ef0' }
+  ];
+  // scale the whole cairn about its visual centre (bolder at 16-32 px)
+  // #small = hand-tuned master for the 16/32 px slots: bigger stones, open gaps, no orb details.
+  var SMALL = location.hash.indexOf('small') >= 0;
+  var K = SMALL ? 1.20 : 1.07, OX = 512, OY = 560;
+  stones.forEach(function (s, i) {
+    s.cx = OX + (s.cx - OX) * K; s.cy = OY + (s.cy - OY) * K; s.w *= K; s.hTop *= K; s.hBot *= K;
+    s.cy -= SMALL ? (i * 16 - 6) : 8;
+    s.d = pebble(s);
+    s.top = s.cy - s.hTop; s.bot = s.cy + s.hBot;
+  });
+
+  // Apple-style continuous-corner rounded rect (straight edges + curvature-continuous corners).
+  function continuousRect(x, y, w, hh, r) {
+    var X1 = x + w, Y1 = y + hh, P = [];
+    function TL(a, b) { return [x + a * r, y + b * r]; }
+    function TR(a, b) { return [X1 - a * r, y + b * r]; }
+    function BR(a, b) { return [X1 - a * r, Y1 - b * r]; }
+    function BL(a, b) { return [x + a * r, Y1 - b * r]; }
+    function pt(q) { return f(q[0]) + ' ' + f(q[1]); }
+    function corner(fn) {   // from edge point (1.528r, 0) round to (0, 1.528r) in corner-local coords
+      return 'C' + pt(fn(1.08849323, 0)) + ' ' + pt(fn(0.86840689, 0.02065766)) + ' ' + pt(fn(0.66993427, 0.06549600)) +
+             'C' + pt(fn(0.37282392, 0.16890914)) + ' ' + pt(fn(0.16890914, 0.37282392)) + ' ' + pt(fn(0.06549600, 0.66993427)) +
+             'C' + pt(fn(0.02065766, 0.86840689)) + ' ' + pt(fn(0, 1.08849323)) + ' ' + pt(fn(0, 1.52866483));
+    }
+    function cornerRev(fn) { // same corner traversed the other way: (0,1.528r) -> (1.528r,0)
+      return 'C' + pt(fn(0, 1.08849323)) + ' ' + pt(fn(0.02065766, 0.86840689)) + ' ' + pt(fn(0.06549600, 0.66993427)) +
+             'C' + pt(fn(0.16890914, 0.37282392)) + ' ' + pt(fn(0.37282392, 0.16890914)) + ' ' + pt(fn(0.66993427, 0.06549600)) +
+             'C' + pt(fn(0.86840689, 0.02065766)) + ' ' + pt(fn(1.08849323, 0)) + ' ' + pt(fn(1.52866483, 0));
+    }
+    return 'M' + pt(TL(1.52866483, 0)) + 'L' + pt(TR(1.52866483, 0)) + corner(TR) +
+           'L' + pt(BR(0, 1.52866483)) + cornerRev(BR) +
+           'L' + pt(BL(1.52866483, 0)) + corner(BL) +
+           'L' + pt(TL(0, 1.52866483)) + cornerRev(TL) + 'Z';
+  }
+  var body = continuousRect(100, 100, 824, 824, 185);
+
+  var h = [];
+  h.push('<defs>');
+  // body + clip
+  h.push('<path id="body" d="' + body + '"/>');
+  h.push('<clipPath id="clipBody"><use href="#body"/></clipPath>');
+
+  // filters
+  h.push('<filter id="shadowBody" x="-20%" y="-20%" width="140%" height="140%">' +
+         '<feGaussianBlur in="SourceAlpha" stdDeviation="16"/><feOffset dy="14" result="b1"/>' +
+         '<feComponentTransfer in="b1" result="s1"><feFuncA type="linear" slope="0.34"/></feComponentTransfer>' +
+         '<feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dy="4" result="b2"/>' +
+         '<feComponentTransfer in="b2" result="s2"><feFuncA type="linear" slope="0.22"/></feComponentTransfer>' +
+         '<feMerge><feMergeNode in="s1"/><feMergeNode in="s2"/></feMerge></filter>');
+  [2, 4, 8, 14, 22, 36, 60].forEach(function (r) {
+    h.push('<filter id="blur' + r + '" filterUnits="userSpaceOnUse" x="-200" y="-200" width="1424" height="1424"><feGaussianBlur stdDeviation="' + r + '"/></filter>');
+  });
+
+  // background aurora gradients
+  h.push('<linearGradient id="bgBase" x1="0.12" y1="0" x2="0.88" y2="1">' +
+         '<stop offset="0" stop-color="#1f8dff"/><stop offset="0.42" stop-color="#2a45d6"/>' +
+         '<stop offset="0.78" stop-color="#3a1f9e"/><stop offset="1" stop-color="#25106a"/></linearGradient>');
+  h.push('<radialGradient id="bgCyan" cx="0.18" cy="0.10" r="0.62">' +
+         '<stop offset="0" stop-color="#5ff0ff" stop-opacity="0.95"/><stop offset="0.5" stop-color="#2fb6ff" stop-opacity="0.35"/>' +
+         '<stop offset="1" stop-color="#2fb6ff" stop-opacity="0"/></radialGradient>');
+  h.push('<radialGradient id="bgViolet" cx="0.92" cy="0.86" r="0.66">' +
+         '<stop offset="0" stop-color="#b264ff" stop-opacity="0.85"/><stop offset="0.55" stop-color="#7a3cf0" stop-opacity="0.3"/>' +
+         '<stop offset="1" stop-color="#7a3cf0" stop-opacity="0"/></radialGradient>');
+  h.push('<radialGradient id="vignette" cx="0.5" cy="0.46" r="0.72">' +
+         '<stop offset="0.55" stop-color="#0a0a3a" stop-opacity="0"/><stop offset="1" stop-color="#07062a" stop-opacity="0.45"/></radialGradient>');
+  // halo / orb behind the cairn
+  h.push('<radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">' +
+         '<stop offset="0" stop-color="#f2fbff" stop-opacity="0.85"/><stop offset="0.38" stop-color="#9adcff" stop-opacity="0.50"/>' +
+         '<stop offset="0.72" stop-color="#7a8cff" stop-opacity="0.16"/><stop offset="1" stop-color="#6a7dff" stop-opacity="0"/></radialGradient>');
+  h.push('<radialGradient id="orbFill" cx="0.36" cy="0.30" r="0.8">' +
+         '<stop offset="0" stop-color="#a8ecff" stop-opacity="0.42"/><stop offset="0.55" stop-color="#5a6cff" stop-opacity="0.08"/>' +
+         '<stop offset="0.85" stop-color="#7a4cff" stop-opacity="0.22"/><stop offset="1" stop-color="#b48cff" stop-opacity="0.40"/></radialGradient>');
+  h.push('<linearGradient id="orbRim" x1="0.2" y1="0" x2="0.8" y2="1">' +
+         '<stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="0.45" stop-color="#bfe8ff" stop-opacity="0.06"/>' +
+         '<stop offset="0.8" stop-color="#c9b0ff" stop-opacity="0.10"/><stop offset="1" stop-color="#e6d8ff" stop-opacity="0.45"/></linearGradient>');
+  // body rim (Liquid Glass edge)
+  h.push('<linearGradient id="bodyRim" x1="0" y1="0" x2="0" y2="1">' +
+         '<stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/><stop offset="0.18" stop-color="#ffffff" stop-opacity="0.12"/>' +
+         '<stop offset="0.8" stop-color="#ffffff" stop-opacity="0.02"/><stop offset="1" stop-color="#d9c6ff" stop-opacity="0.35"/></linearGradient>');
+
+  // per-stone defs
+  stones.forEach(function (s, i) {
+    var id = 's' + i;
+    h.push('<path id="' + id + '" d="' + s.d + '"/>');
+    h.push('<clipPath id="' + id + 'clip"><use href="#' + id + '"/></clipPath>');
+    h.push('<linearGradient id="' + id + 'fill" gradientUnits="userSpaceOnUse" x1="0" y1="' + f(s.top) + '" x2="0" y2="' + f(s.bot) + '">' +
+           '<stop offset="0" stop-color="' + s.tTop + '" stop-opacity="0.97"/>' +
+           '<stop offset="0.48" stop-color="' + s.tMid + '" stop-opacity="0.90"/>' +
+           '<stop offset="1" stop-color="' + s.tBot + '" stop-opacity="0.92"/></linearGradient>');
+    h.push('<linearGradient id="' + id + 'rim" gradientUnits="userSpaceOnUse" x1="' + f(s.cx - s.w / 2) + '" y1="' + f(s.top) + '" x2="' + f(s.cx + s.w / 2) + '" y2="' + f(s.bot) + '">' +
+           '<stop offset="0" stop-color="#ffffff" stop-opacity="1"/><stop offset="0.45" stop-color="#ffffff" stop-opacity="0.25"/>' +
+           '<stop offset="0.75" stop-color="' + s.rim + '" stop-opacity="0.2"/><stop offset="1" stop-color="' + s.rim + '" stop-opacity="0.9"/></linearGradient>');
+    // mask: bottom crescent (stone minus stone shifted up) - refracted light gathering at the base
+    h.push('<mask id="' + id + 'botM" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">' +
+           '<use href="#' + id + '" fill="#fff"/><use href="#' + id + '" fill="#000" transform="translate(' + f(s.w * 0.035) + ' ' + f(-(s.hTop + s.hBot) * 0.17) + ')" filter="url(#blur8)"/></mask>');
+    // mask: top crescent (stone minus stone shifted down) - crisp specular edge
+    h.push('<mask id="' + id + 'topM" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">' +
+           '<use href="#' + id + '" fill="#fff"/><use href="#' + id + '" fill="#000" transform="translate(' + f(s.w * 0.02) + ' ' + f((s.hTop + s.hBot) * 0.075) + ')" filter="url(#blur2)"/></mask>');
+  });
+  h.push('</defs>');
+
+  // ---------- body ----------
+  h.push('<use href="#body" fill="#1b2a9a" filter="url(#shadowBody)"/>');
+  h.push('<g clip-path="url(#clipBody)">');
+  h.push('<rect x="0" y="0" width="1024" height="1024" fill="url(#bgBase)"/>');
+  h.push('<rect x="0" y="0" width="1024" height="1024" fill="url(#bgCyan)"/>');
+  h.push('<rect x="0" y="0" width="1024" height="1024" fill="url(#bgViolet)"/>');
+  // aurora ribbons
+  h.push('<g style="mix-blend-mode:screen">');
+  h.push('<path d="M40 330 C 230 170, 420 300, 600 210 S 900 90, 1010 160" stroke="#62e9ff" stroke-width="120" fill="none" opacity="0.40" filter="url(#blur36)"/>');
+  h.push('<path d="M60 250 C 260 120, 470 230, 640 150 S 900 60, 1000 90" stroke="#bff6ff" stroke-width="26" fill="none" opacity="0.40" filter="url(#blur14)"/>');
+  h.push('<path d="M-20 880 C 200 760, 420 900, 640 800 S 930 700, 1060 760" stroke="#a46bff" stroke-width="150" fill="none" opacity="0.45" filter="url(#blur36)"/>');
+  h.push('<path d="M120 700 C 300 640, 520 720, 720 650 S 960 600, 1040 640" stroke="#5a8cff" stroke-width="70" fill="none" opacity="0.22" filter="url(#blur36)"/>');
+  h.push('</g>');
+  h.push('<rect x="0" y="0" width="1024" height="1024" fill="url(#vignette)"/>');
+
+  // halo + orb behind the cairn
+  h.push('<circle cx="512" cy="500" r="360" fill="url(#halo)" style="mix-blend-mode:screen"/>');
+  if (!SMALL) {
+  h.push('<circle cx="512" cy="516" r="292" fill="url(#orbFill)"/>');
+  h.push('<circle cx="512" cy="516" r="291" fill="none" stroke="url(#orbRim)" stroke-width="3.5"/>');
+  h.push('<path d="M ' + f(512 - 291 * Math.cos(0.35)) + ' ' + f(516 - 291 * Math.sin(0.35)) + ' A 291 291 0 0 1 ' + f(512 - 291 * Math.cos(1.25)) + ' ' + f(516 - 291 * Math.sin(1.25)) + '" stroke="#ffffff" stroke-width="10" stroke-linecap="round" fill="none" opacity="0.55" filter="url(#blur4)"/>');
+  h.push('<path d="M ' + f(512 + 291 * Math.cos(0.25)) + ' ' + f(516 + 291 * Math.sin(0.25)) + ' A 291 291 0 0 1 ' + f(512 + 291 * Math.cos(1.2)) + ' ' + f(516 + 291 * Math.sin(1.2)) + '" stroke="#d4b8ff" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.45" filter="url(#blur8)"/>');
+
+  }
+  // luminous aura hugging the cairn silhouette
+  h.push('<g opacity="0.60" style="mix-blend-mode:screen" filter="url(#blur36)" transform="translate(512 540) scale(1.10) translate(-512 -540)">' +
+         '<use href="#s0" fill="#9b8cff"/><use href="#s1" fill="#8fd0ff"/><use href="#s2" fill="#a8f4ff"/></g>');
+  // ground shadow + glow under the cairn
+  var b0 = stones[0];
+  h.push('<ellipse cx="' + f(b0.cx + 6) + '" cy="' + f(b0.bot + 10) + '" rx="' + f(b0.w * 0.46) + '" ry="22" fill="#0b0640" opacity="0.55" filter="url(#blur14)"/>');
+  h.push('<ellipse cx="' + f(b0.cx) + '" cy="' + f(b0.bot + 4) + '" rx="' + f(b0.w * 0.36) + '" ry="10" fill="#c3a8ff" opacity="0.5" filter="url(#blur8)"/>');
+
+  // ---------- stones ----------
+  stones.forEach(function (s, i) {
+    var id = 's' + i, sh = s.hTop + s.hBot;
+    // soft shadow cast by this stone
+    h.push('<use href="#' + id + '" fill="#0a0640" opacity="0.50" transform="translate(6 ' + f(sh * 0.09) + ')" filter="url(#blur14)"/>');
+    h.push('<g>');
+    // glass body
+    h.push('<use href="#' + id + '" fill="url(#' + id + 'fill)"/>');
+    h.push('<g clip-path="url(#' + id + 'clip)">');
+    // inner depth: edge darkening, heavier along the lower right
+    h.push('<use href="#' + id + '" fill="none" stroke="' + s.tBot + '" stroke-width="' + f(sh * 0.30) + '" opacity="0.55" transform="translate(' + f(s.w * 0.012) + ' ' + f(sh * 0.06) + ')" filter="url(#blur14)"/>');
+    // refraction band: the deep background seen bent through the lower half of the stone
+    h.push('<ellipse cx="' + f(s.cx + s.w * 0.04) + '" cy="' + f(s.cy + sh * 0.16) + '" rx="' + f(s.w * 0.40) + '" ry="' + f(sh * 0.20) + '" fill="' + s.deep + '" opacity="0.50" filter="url(#blur14)"/>');
+    // inner luminous core (light passing through)
+    h.push('<ellipse cx="' + f(s.cx - s.w * 0.06) + '" cy="' + f(s.cy - sh * 0.08) + '" rx="' + f(s.w * 0.30) + '" ry="' + f(sh * 0.26) + '" fill="#ffffff" opacity="0.55" filter="url(#blur22)"/>');
+    // shadow from the stone resting above
+    if (stones[i + 1]) {
+      var u = stones[i + 1];
+      h.push('<use href="#s' + (i + 1) + '" fill="#1c1078" opacity="0.70" transform="translate(4 ' + f((u.hTop + u.hBot) * 0.12) + ')" filter="url(#blur8)"/>');
+    }
+    h.push('</g>');
+    // bottom caustic crescent
+    h.push('<use href="#' + id + '" fill="' + s.caustic + '" mask="url(#' + id + 'botM)" opacity="1"/>');
+    h.push('<g clip-path="url(#' + id + 'clip)"><use href="#' + id + '" fill="none" stroke="#ffffff" stroke-width="7" opacity="0.55" transform="translate(0 -3)" filter="url(#blur4)" mask="url(#' + id + 'botM)"/></g>');
+    // crisp top specular rim
+    h.push('<use href="#' + id + '" fill="#ffffff" mask="url(#' + id + 'topM)" opacity="0.95"/>');
+    // edge stroke
+    h.push('<use href="#' + id + '" fill="none" stroke="url(#' + id + 'rim)" stroke-width="3"/>');
+    // specular highlight
+    var hx = s.cx - s.w * 0.22, hy = s.cy - s.hTop * 0.52;
+    h.push('<ellipse cx="' + f(hx) + '" cy="' + f(hy) + '" rx="' + f(s.w * 0.12) + '" ry="' + f(s.hTop * 0.14) + '" fill="#ffffff" opacity="0.95" transform="rotate(' + f(-14 + s.tilt) + ' ' + f(hx) + ' ' + f(hy) + ')" filter="url(#blur4)"/>');
+    h.push('</g>');
+  });
+
+  // body rim highlight (inner)
+  h.push('<use href="#body" fill="none" stroke="url(#bodyRim)" stroke-width="5"/>');
+  h.push('</g>');
+
+  svg.innerHTML = h.join('');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No color-scheme meta on purpose: when an embedder's scheme differs, Chrome paints an opaque
+     backdrop behind the frame, which would put a box around the transparent orb. -->
+<title>Cairn avatar: Constellation Dots</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body { -webkit-user-select: none; user-select: none; cursor: default; -webkit-tap-highlight-color: transparent; }
+  .stage {
+    position: fixed; inset: 0;
+    transform-origin: 50% 50%;
+    transition: transform 320ms cubic-bezier(.2, .8, .2, 1);
+    will-change: transform;
+  }
+  .stage:hover { transform: scale(1.05); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; transition: opacity 500ms ease; }
+
+  /* Chips sit on the orb rim at 45 degrees (orb radius is 36vmin, so 25.5vmin on each axis). */
+  .chip {
+    position: absolute; box-sizing: border-box;
+    transform: translate(-50%, -50%) scale(.35);
+    opacity: 0;
+    transition: opacity 360ms ease, transform 520ms cubic-bezier(.2, 1.45, .35, 1);
+    font-family: -apple-system, "SF Pro Rounded", "SF Pro Text", system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700; text-align: center; white-space: nowrap;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+    pointer-events: none;
+  }
+  .chip.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+  .badge {
+    left: calc(50% + 25.5vmin); top: calc(50% - 25.5vmin);
+    min-width: 19vmin; height: 19vmin; padding: 0 4.5vmin; border-radius: 10vmin;
+    font-size: 11.5vmin; line-height: 19vmin; color: #fff;
+    background: linear-gradient(180deg, #ff6b6b 0%, #f0364a 55%, #d91c3c 100%);
+    box-shadow: 0 0 0 1.5vmin rgba(10, 8, 18, .92), 0 1.2vmin 4vmin rgba(240, 54, 74, .5);
+  }
+  .badge.dot { min-width: 12vmin; height: 12vmin; padding: 0; font-size: 0; }
+  .badge.on { animation: badge-pop 1.8s ease-in-out infinite; }
+  @keyframes badge-pop {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.08); }
+  }
+
+  .pip {
+    left: calc(50% + 25.5vmin); top: calc(50% + 25.5vmin);
+    min-width: 16vmin; height: 16vmin; padding: 0 3.6vmin; border-radius: 8vmin;
+    font-size: 10vmin; line-height: 16vmin; color: #0a1640;
+    background: linear-gradient(180deg, #f4f9ff 0%, #b9dcff 100%);
+    box-shadow: 0 0 0 1.4vmin rgba(8, 10, 26, .92), 0 0 5vmin rgba(120, 180, 255, .55);
+  }
+
+  .off {
+    left: calc(50% + 25.5vmin); top: calc(50% + 25.5vmin);
+    width: 10vmin; height: 10vmin; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #c3c7cd 0%, #8a8f97 60%, #6f747c 100%);
+    box-shadow: 0 0 0 1.4vmin rgba(18, 18, 22, .92);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stage, .chip { transition-duration: 1ms; }
+    .badge.on { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <canvas id="c" aria-hidden="true"></canvas>
+  <div class="chip badge" id="badge" aria-hidden="true"></div>
+  <div class="chip pip" id="pip" aria-hidden="true"></div>
+  <div class="chip off" id="off" aria-hidden="true"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var badgeEl = document.getElementById('badge');
+  var pipEl = document.getElementById('pip');
+  var offEl = document.getElementById('off');
+
+  var TAU = Math.PI * 2;
+
+  // ---------------------------------------------------------------- motion prefs
+  var mq = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  var reduced = !!(mq && mq.matches);
+  if (mq) {
+    var onMq = function (e) { reduced = e.matches; };
+    if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq);
+  }
+
+  // ---------------------------------------------------------------- Fibonacci lattice
+  var N = 232;
+  var PX = new Float32Array(N), PY = new Float32Array(N), PZ = new Float32Array(N);
+  var SEED = new Float32Array(N), TW = new Float32Array(N);
+  var GA = Math.PI * (3 - Math.sqrt(5));
+  for (var i = 0; i < N; i++) {
+    var y = 1 - ((i + 0.5) / N) * 2;
+    var r = Math.sqrt(1 - y * y);
+    var th = GA * i;
+    PX[i] = Math.cos(th) * r; PY[i] = y; PZ[i] = Math.sin(th) * r;
+    var s = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+    SEED[i] = s - Math.floor(s);
+    TW[i] = 1 - r; // vortex twist: dots near the spin axis wind further
+  }
+
+  // Nearest-neighbour pairs for the connecting shimmer (computed once).
+  var pairs = [];
+  (function () {
+    var seen = {};
+    for (var a = 0; a < N; a++) {
+      var best = [];
+      for (var b = 0; b < N; b++) {
+        if (a === b) continue;
+        var dx = PX[a] - PX[b], dy = PY[a] - PY[b], dz = PZ[a] - PZ[b];
+        var d = dx * dx + dy * dy + dz * dz;
+        if (best.length < 3) { best.push([d, b]); best.sort(function (p, q) { return p[0] - q[0]; }); }
+        else if (d < best[2][0]) { best[2] = [d, b]; best.sort(function (p, q) { return p[0] - q[0]; }); }
+      }
+      for (var k = 0; k < best.length; k++) {
+        var lo = Math.min(a, best[k][1]), hi = Math.max(a, best[k][1]);
+        var key = lo * N + hi;
+        if (!seen[key]) { seen[key] = 1; pairs.push(lo, hi); }
+      }
+    }
+  })();
+  var NP = pairs.length / 2;
+
+  // ---------------------------------------------------------------- state presets
+  var PRESETS = {
+    idle: {
+      speed: .22, tilt: .42, swirl: 0, tight: 1, breathe: 1, trail: 0, conn: 1, wave: 0, ripple: 0,
+      bright: 1, haloI: .5, coreI: .22, dotSize: 1, comet: 0, squash: 0,
+      dotA: [236, 243, 255], dotB: [118, 128, 255], halo: [104, 108, 246],
+      discIn: [26, 30, 66], discOut: [6, 7, 20], core: [110, 122, 255]
+    },
+    working: {
+      speed: 1.35, tilt: 1.12, swirl: 3.4, tight: .86, breathe: .25, trail: 1, conn: .4, wave: 0, ripple: 0,
+      bright: 1.12, haloI: .6, coreI: .44, dotSize: .92, comet: 1, squash: .36,
+      dotA: [218, 240, 255], dotB: [84, 150, 255], halo: [72, 132, 255],
+      discIn: [18, 32, 76], discOut: [4, 8, 24], core: [80, 152, 255]
+    },
+    attention: {
+      speed: .32, tilt: .42, swirl: 0, tight: 1, breathe: .5, trail: 0, conn: .7, wave: 1, ripple: 0,
+      bright: 1.1, haloI: .64, coreI: .4, dotSize: 1.02, comet: 0, squash: 0,
+      dotA: [255, 218, 168], dotB: [255, 112, 78], halo: [255, 134, 72],
+      discIn: [56, 28, 30], discOut: [18, 8, 12], core: [255, 122, 70]
+    },
+    offline: {
+      speed: .07, tilt: .42, swirl: 0, tight: .94, breathe: .45, trail: 0, conn: 0, wave: 0, ripple: 0,
+      bright: .5, haloI: .1, coreI: .06, dotSize: .9, comet: 0, squash: 0,
+      dotA: [172, 176, 184], dotB: [92, 96, 106], halo: [124, 128, 140],
+      discIn: [52, 54, 60], discOut: [22, 23, 27], core: [124, 124, 134]
+    },
+    listening: {
+      speed: .38, tilt: .3, swirl: 0, tight: 1.02, breathe: .3, trail: 0, conn: .5, wave: 0, ripple: 1,
+      bright: 1.25, haloI: .7, coreI: .5, dotSize: 1.05, comet: 0, squash: 0,
+      dotA: [226, 250, 255], dotB: [78, 200, 255], halo: [80, 192, 255],
+      discIn: [14, 38, 70], discOut: [4, 10, 26], core: [90, 202, 255]
+    }
+  };
+  var NUM_KEYS = ['speed', 'tilt', 'swirl', 'tight', 'breathe', 'trail', 'conn', 'wave', 'ripple',
+    'bright', 'haloI', 'coreI', 'dotSize', 'comet', 'squash'];
+  var COL_KEYS = ['dotA', 'dotB', 'halo', 'discIn', 'discOut', 'core'];
+
+  function clonePreset(p) {
+    var o = {};
+    NUM_KEYS.forEach(function (k) { o[k] = p[k]; });
+    COL_KEYS.forEach(function (k) { o[k] = p[k].slice(); });
+    return o;
+  }
+
+  var cur = clonePreset(PRESETS.idle);
+  var tgt = PRESETS.idle;
+  var stateName = 'idle';
+  var nComets = 0;
+  var cometA = [0, 0, 0];
+
+  // integrated phases (so speed changes never cause jumps)
+  var T = 0, spin = 0, breathPh = 0, wavePh = 0, ripplePh = 0, cometPh = 0, shimmerPh = 0, accelPh = 0;
+
+  // ---------------------------------------------------------------- sprites
+  var SP = 48;
+  function makeCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+  var baseSprite = makeCanvas(SP, SP);
+  (function () {
+    var g = baseSprite.getContext('2d');
+    var gr = g.createRadialGradient(SP / 2, SP / 2, 0, SP / 2, SP / 2, SP / 2);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.14, 'rgba(255,255,255,.96)');
+    gr.addColorStop(0.28, 'rgba(255,255,255,.52)');
+    gr.addColorStop(0.48, 'rgba(255,255,255,.15)');
+    gr.addColorStop(0.72, 'rgba(255,255,255,.035)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, SP, SP);
+  })();
+  var NB = 4;
+  var sprites = [], spriteKey = [];
+  for (var b = 0; b < NB; b++) { sprites.push(makeCanvas(SP, SP)); spriteKey.push(''); }
+  function tintSprite(idx, rgb) {
+    var key = (rgb[0] | 0) + ',' + (rgb[1] | 0) + ',' + (rgb[2] | 0);
+    if (spriteKey[idx] === key) return;
+    spriteKey[idx] = key;
+    var g = sprites[idx].getContext('2d');
+    g.globalCompositeOperation = 'source-over';
+    g.clearRect(0, 0, SP, SP);
+    g.drawImage(baseSprite, 0, 0);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = 'rgb(' + key + ')';
+    g.fillRect(0, 0, SP, SP);
+  }
+
+  // Static film-grain dither to kill banding in the dark disc gradient.
+  var noisePattern = null;
+  (function () {
+    var n = makeCanvas(64, 64), g = n.getContext('2d');
+    var img = g.createImageData(64, 64), d = img.data;
+    for (var p = 0; p < d.length; p += 4) {
+      var v = Math.random() < 0.5 ? 0 : 255;
+      d[p] = d[p + 1] = d[p + 2] = v;
+      d[p + 3] = (Math.random() * 60) | 0;
+    }
+    g.putImageData(img, 0, 0);
+    noisePattern = ctx.createPattern(n, 'repeat');
+  })();
+
+  // ---------------------------------------------------------------- sizing
+  var W = 0, H = 0;
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);   // 2x is crisp on Retina; 3x only costs fill-rate
+    var w = Math.max(1, Math.round(window.innerWidth * dpr));
+    var h = Math.max(1, Math.round(window.innerHeight * dpr));
+    if (w !== W || h !== H) { W = canvas.width = w; H = canvas.height = h; }
+  }
+  window.addEventListener('resize', function () { resize(); draw(); });
+
+  // ---------------------------------------------------------------- helpers
+  function rgba(c, a) {
+    return 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' + (a < 0 ? 0 : a > 1 ? 1 : a).toFixed(4) + ')';
+  }
+  function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  // projection buffers
+  var SX = new Float32Array(N), SY = new Float32Array(N), DEP = new Float32Array(N);
+  var SZ = new Float32Array(N), HOT = new Float32Array(N), DIM = new Float32Array(N), NXa = new Float32Array(N), NYa = new Float32Array(N);
+
+  var CAM = 3.2;
+  var COMETS = [
+    { incl: .32, rad: 1.22, spd: 1.0, off: 0 },
+    { incl: -.62, rad: 1.13, spd: 1.28, off: 2.1 },
+    { incl: 1.05, rad: 1.17, spd: .86, off: 4.2 }
+  ];
+
+  // ---------------------------------------------------------------- update
+  function update(dt) {
+    var k = 1 - Math.exp(-dt / 0.17);   // ~500 ms to settle
+    for (var i = 0; i < NUM_KEYS.length; i++) {
+      var key = NUM_KEYS[i];
+      cur[key] += (tgt[key] - cur[key]) * k;
+    }
+    for (var j = 0; j < COL_KEYS.length; j++) {
+      var c = cur[COL_KEYS[j]], t = tgt[COL_KEYS[j]];
+      c[0] += (t[0] - c[0]) * k; c[1] += (t[1] - c[1]) * k; c[2] += (t[2] - c[2]) * k;
+    }
+    for (var q = 0; q < 3; q++) cometA[q] += (((q < nComets) ? 1 : 0) - cometA[q]) * k;
+
+    var m = reduced ? 0.22 : 1;
+    var work = clamp(cur.swirl / 3.4, 0, 1);
+    accelPh += dt * 0.9 * m;
+    spin += cur.speed * dt * m * (1 + 0.35 * work * Math.sin(accelPh));
+    breathPh += dt * 0.85 * m;
+    wavePh += dt * 0.62 * m;
+    ripplePh += dt * 6.2 * m;
+    cometPh += dt * 2.3 * m;
+    shimmerPh += dt * 0.8 * m;
+    T += dt * m;
+  }
+
+  // ---------------------------------------------------------------- draw
+  function draw() {
+    if (!W || !H) return;
+    var S = Math.min(W, H), cx = W / 2, cy = H / 2;
+    var Rd = 0.36 * S;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, W, H);
+
+    var breath = Math.sin(breathPh);
+    var wv = wavePh - Math.floor(wavePh);
+    var level = clamp(0.55 + 0.25 * Math.sin(T * 3.1) + 0.2 * Math.sin(T * 5.3 + 1), 0, 1);
+    var ampScale = reduced ? 0.5 : 1;
+
+    // wave reaches rim around wv ~ 0.55 -> halo peaks then
+    var hp = Math.exp(-Math.pow((wv - 0.55) / 0.16, 2));
+    var haloA = cur.haloI * (1 + 0.14 * breath * cur.breathe) * (1 + 0.55 * hp * cur.wave) * (1 + 0.35 * (level - 0.5) * cur.ripple);
+
+    // 1. soft contact shadow (reads on light desktops)
+    var g = ctx.createRadialGradient(cx, cy + 0.03 * S, Rd * 0.78, cx, cy + 0.03 * S, Rd * 1.3);
+    g.addColorStop(0, 'rgba(4,6,20,.34)');
+    g.addColorStop(0.45, 'rgba(4,6,20,.12)');
+    g.addColorStop(1, 'rgba(4,6,20,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // 2. halo glow
+    g = ctx.createRadialGradient(cx, cy, Rd * 0.9, cx, cy, S * 0.47);
+    g.addColorStop(0, rgba(cur.halo, haloA));
+    g.addColorStop(0.22, rgba(cur.halo, haloA * 0.58));
+    g.addColorStop(0.5, rgba(cur.halo, haloA * 0.22));
+    g.addColorStop(0.78, rgba(cur.halo, haloA * 0.06));
+    g.addColorStop(1, rgba(cur.halo, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // 2b. attention ping ring expanding past the rim
+    if (cur.wave > 0.01) {
+      var e = clamp((wv - 0.45) / 0.55, 0, 1);
+      if (e > 0 && e < 1) {
+        var ee = 1 - Math.pow(1 - e, 2);
+        var rr = Rd * (1.0 + 0.2 * ee), w = S * 0.035;
+        var ra = cur.wave * Math.pow(1 - e, 1.6) * 0.6;
+        g = ctx.createRadialGradient(cx, cy, Math.max(0, rr - w), cx, cy, rr + w);
+        g.addColorStop(0, rgba(cur.halo, 0));
+        g.addColorStop(0.5, rgba(mix(cur.halo, [255, 200, 150], 0.35), ra));
+        g.addColorStop(1, rgba(cur.halo, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(cx, cy, rr + w, 0, TAU); ctx.fill();
+      }
+    }
+
+    // 2c. listening: soft voice-waveform rings hugging the rim
+    if (cur.ripple > 0.01) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineJoin = 'round';
+      var wcol = mix(cur.halo, [220, 250, 255], 0.35);
+      for (var ring = 0; ring < 2; ring++) {
+        var amp = S * (0.016 + 0.008 * ring) * (0.35 + level) * (reduced ? 0.4 : 1);
+        var baseR = Rd * (1.035 + 0.035 * ring);
+        ctx.strokeStyle = rgba(wcol, cur.ripple * (ring ? 0.22 : 0.42));
+        ctx.lineWidth = Math.max(1, S * (ring ? 0.006 : 0.009));
+        ctx.beginPath();
+        for (var sg = 0; sg <= 120; sg++) {
+          var an = sg / 120 * TAU;
+          var wob = Math.sin(an * 5 + ripplePh * (ring ? -0.55 : 0.7)) * Math.sin(an * 3 - ripplePh * 0.37 + ring * 2.0);
+          var rr2 = baseR + amp * wob;
+          var wx = cx + Math.cos(an) * rr2, wy = cy + Math.sin(an) * rr2;
+          if (sg === 0) ctx.moveTo(wx, wy); else ctx.lineTo(wx, wy);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.lineWidth = Math.max(3, S * 0.03);
+        ctx.strokeStyle = rgba(cur.halo, cur.ripple * (ring ? 0.05 : 0.09));
+        ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // 3. disc body
+    g = ctx.createRadialGradient(cx - Rd * 0.12, cy - Rd * 0.22, 0, cx, cy, Rd);
+    g.addColorStop(0, rgba(cur.discIn, 1));
+    g.addColorStop(0.6, rgba(mix(cur.discIn, cur.discOut, 0.62), 1));
+    g.addColorStop(1, rgba(cur.discOut, 1));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, Rd, 0, TAU); ctx.fill();
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, Rd, 0, TAU); ctx.clip();
+
+    // dither
+    ctx.globalAlpha = 0.09;
+    ctx.fillStyle = noisePattern;
+    ctx.fillRect(cx - Rd, cy - Rd, Rd * 2, Rd * 2);
+    ctx.globalAlpha = 1;
+
+    ctx.globalCompositeOperation = 'lighter';
+
+    // inner core glow
+    var Rs = 0.262 * S * cur.tight * (1 + 0.03 * cur.breathe * breath);
+    var coreA = cur.coreI * (1 + 0.18 * breath * cur.breathe) * (1 + 0.5 * hp * cur.wave) * (1 + 0.5 * (level - 0.4) * cur.ripple);
+    g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Rs * 1.25);
+    g.addColorStop(0, rgba(cur.core, coreA));
+    g.addColorStop(0.45, rgba(cur.core, coreA * 0.45));
+    g.addColorStop(1, rgba(cur.core, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - Rd, cy - Rd, Rd * 2, Rd * 2);
+
+    // ---- project dots
+    for (var bI = 0; bI < NB; bI++) {
+      var mt = Math.pow((bI + 0.5) / NB, 0.85);
+      tintSprite(bI, mix(cur.dotB, cur.dotA, mt));
+    }
+
+    var tilt = cur.tilt + 0.06 * Math.sin(T * 0.23);
+    var roll = 0.14 * Math.sin(T * 0.17) - 0.18;
+    var cT = Math.cos(tilt), sT = Math.sin(tilt), cR = Math.cos(roll), sR = Math.sin(roll);
+    var swirl = cur.swirl;
+    var sq = 1 - cur.squash;
+    var waveOn = cur.wave > 0.01, rippleOn = cur.ripple > 0.01;
+    var front = wv * 1.3 - 0.12;
+    var jit = 0.014 * cur.breathe;
+
+    for (var i = 0; i < N; i++) {
+      var px = PX[i], py = PY[i] * sq, pz = PZ[i];
+      var sd = SEED[i];
+      var a = spin + swirl * TW[i];
+      var ca = Math.cos(a), sa = Math.sin(a);
+      var x = px * ca + pz * sa;
+      var z = -px * sa + pz * ca;
+      var y2 = py * cT - z * sT;
+      var z2 = py * sT + z * cT;
+
+      var disp = jit * Math.sin(T * 1.3 + sd * TAU);
+      var hot = 0;
+      DIM[i] = 1;
+      if (waveOn || rippleOn) {
+        var dA = Math.acos(clamp(z2, -1, 1)) / Math.PI; // 0 = facing viewer, 1 = back
+        if (waveOn) {
+          var dd = dA - front;
+          hot = Math.exp(-dd * dd / 0.01) * cur.wave;
+          disp += 0.12 * hot * ampScale;
+        }
+        if (rippleOn) {
+          var rp = Math.sin(dA * Math.PI * 4.5 - ripplePh);
+          disp += cur.ripple * 0.065 * ampScale * (0.35 + level) * rp;
+          hot = Math.max(hot, cur.ripple * 0.55 * Math.max(0, rp) * level);
+          DIM[i] = 1 + 0.45 * cur.ripple * rp;
+        }
+      }
+      var rs = 1 + disp;
+      var persp = CAM / (CAM - z2 * rs);
+      var X = x * rs * Rs * persp, Y = y2 * rs * Rs * persp;
+      SX[i] = cx + X * cR - Y * sR;
+      SY[i] = cy - (X * sR + Y * cR);
+      SZ[i] = persp;
+      DEP[i] = (z2 + 1) * 0.5;
+      HOT[i] = hot;
+      NXa[i] = x; NYa[i] = y2;
+    }
+
+    // ---- connecting shimmer (front hemisphere only, a band that sweeps across)
+    if (cur.conn > 0.02) {
+      var LB = 3, paths = [[], [], []];
+      for (var p = 0; p < NP; p++) {
+        var ia = pairs[p * 2], ib = pairs[p * 2 + 1];
+        var da = DEP[ia], db = DEP[ib];
+        if (da < 0.55 || db < 0.55) continue;
+        var ph = (NXa[ia] * 0.8 + NYa[ia] * 0.6) * 2.4 - shimmerPh * 1.6;
+        var sh = 0.5 + 0.5 * Math.sin(ph);
+        sh = sh * sh; sh = sh * sh; sh = sh * sh;
+        var dmin = Math.min(da, db);
+        var al = sh * dmin * dmin;
+        if (al < 0.06) continue;
+        var bucket = al > 0.55 ? 2 : al > 0.25 ? 1 : 0;
+        paths[bucket].push(ia, ib);
+      }
+      ctx.lineWidth = Math.max(0.6, S * 0.0042);
+      ctx.lineCap = 'round';
+      var lineCol = mix(cur.dotB, cur.dotA, 0.6);
+      var la = [0.07, 0.14, 0.24];
+      for (var lb = 0; lb < LB; lb++) {
+        var arr = paths[lb];
+        if (!arr.length) continue;
+        ctx.strokeStyle = rgba(lineCol, la[lb] * cur.conn * cur.bright);
+        ctx.beginPath();
+        for (var q = 0; q < arr.length; q += 2) {
+          ctx.moveTo(SX[arr[q]], SY[arr[q]]);
+          ctx.lineTo(SX[arr[q + 1]], SY[arr[q + 1]]);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // ---- dots
+    var base = 0.036 * S * cur.dotSize;
+    var bright = cur.bright;
+    var trail = cur.trail;
+    var doTrail = trail > 0.02;
+    var trailStep = 0.03 + 0.022 * cur.speed;
+    for (var i2 = 0; i2 < N; i2++) {
+      var dep = DEP[i2], hot2 = HOT[i2], ps = SZ[i2];
+      var tw = 0.86 + 0.14 * Math.sin(T * 2.1 + SEED[i2] * 50);
+      var alpha = (0.1 + 0.9 * Math.pow(dep, 1.6)) * bright * tw * (1 + 0.9 * hot2) * DIM[i2];
+      var size = base * ps * (0.5 + 0.5 * dep) * (1 + 0.55 * hot2);
+      var bk = dep * NB | 0; if (bk >= NB) bk = NB - 1;
+      var spr = sprites[bk];
+      if (doTrail) {
+        // comet-style trail: re-project the dot at earlier angles
+        var px2 = PX[i2], py2 = PY[i2] * sq, pz2 = PZ[i2];
+        var a0 = spin + swirl * TW[i2];
+        var ts = trailStep * (0.7 + TW[i2] * 0.9);
+        for (var kk = 1; kk <= 6; kk++) {
+          var ak = a0 - ts * kk;
+          var cak = Math.cos(ak), sak = Math.sin(ak);
+          var xk = px2 * cak + pz2 * sak, zk = -px2 * sak + pz2 * cak;
+          var yk2 = py2 * cT - zk * sT, zk2 = py2 * sT + zk * cT;
+          var pk = CAM / (CAM - zk2);
+          var Xk = xk * Rs * pk, Yk = yk2 * Rs * pk;
+          var fk = 1 - kk / 7;
+          var szk = size * (1 - kk * 0.085);
+          ctx.globalAlpha = clamp(alpha * trail * fk * fk * 0.55, 0, 1);
+          ctx.drawImage(spr, cx + Xk * cR - Yk * sR - szk / 2, cy - (Xk * sR + Yk * cR) - szk / 2, szk, szk);
+        }
+      }
+      ctx.globalAlpha = alpha > 1 ? 1 : alpha;
+      ctx.drawImage(spr, SX[i2] - size / 2, SY[i2] - size / 2, size, size);
+      if (hot2 > 0.35 && dep > 0.4) {
+        ctx.globalAlpha = clamp((hot2 - 0.35) * 0.9, 0, 1);
+        ctx.drawImage(baseSprite, SX[i2] - size * 0.35, SY[i2] - size * 0.35, size * 0.7, size * 0.7);
+      }
+    }
+
+    // ---- orbiting comets (working); one per running agent, up to 3
+    if (cur.comet > 0.01) {
+      var headCol = sprites[NB - 1];
+      for (var c = 0; c < 3; c++) {
+        var cA = cometA[c] * cur.comet;
+        if (cA < 0.01) continue;
+        var cm = COMETS[c];
+        var ci = Math.cos(cm.incl), si = Math.sin(cm.incl);
+        var Rc = Rs * cm.rad;
+        var phi0 = cometPh * cm.spd + cm.off;
+        // faint orbit ring
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = rgba(cur.dotA, 0.07 * cA);
+        ctx.lineWidth = Math.max(0.6, S * 0.004);
+        ctx.beginPath();
+        for (var sI = 0; sI <= 64; sI++) {
+          var pr = orbitPoint(sI / 64 * TAU, ci, si, cT, sT, Rc, cm.rad);
+          var ox = cx + pr[0] * cR - pr[1] * sR, oy = cy - (pr[0] * sR + pr[1] * cR);
+          if (sI === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+        }
+        ctx.stroke();
+        // tail + head
+        var TL = 22;
+        for (var tI = TL; tI >= 0; tI--) {
+          var phi = phi0 - tI * 0.075;
+          var pt = orbitPoint(phi, ci, si, cT, sT, Rc, cm.rad);
+          var occl = (pt[2] < 0 && (pt[0] * pt[0] + pt[1] * pt[1]) < Rs * Rs * 1.05) ? 0.28 : 1;
+          var f = 1 - tI / (TL + 1);
+          var sz = base * pt[3] * (0.55 + 1.25 * f);
+          ctx.globalAlpha = clamp(cA * occl * f * f * 0.9, 0, 1);
+          var hx = cx + pt[0] * cR - pt[1] * sR, hy = cy - (pt[0] * sR + pt[1] * cR);
+          ctx.drawImage(headCol, hx - sz / 2, hy - sz / 2, sz, sz);
+          if (tI === 0) {
+            var gsz = sz * 2.6;
+            ctx.globalAlpha = clamp(cA * occl * 0.5, 0, 1);
+            ctx.drawImage(sprites[NB - 2], hx - gsz / 2, hy - gsz / 2, gsz, gsz);
+            ctx.globalAlpha = clamp(cA * occl, 0, 1);
+            ctx.drawImage(baseSprite, hx - sz * 0.4, hy - sz * 0.4, sz * 0.8, sz * 0.8);
+          }
+        }
+      }
+    }
+
+    // ---- glass: top sheen + rim light
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.translate(cx, cy - Rd * 0.52);
+    ctx.scale(1, 0.55);
+    g = ctx.createRadialGradient(0, 0, 0, 0, 0, Rd * 0.78);
+    g.addColorStop(0, 'rgba(255,255,255,' + (0.085 * (0.6 + 0.4 * cur.bright)).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, Rd * 0.78, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    // inner edge vignette for depth
+    g = ctx.createRadialGradient(cx, cy, Rd * 0.8, cx, cy, Rd);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,8,.35)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - Rd, cy - Rd, Rd * 2, Rd * 2);
+
+    ctx.restore(); // end clip
+
+    // rim
+    var lw = Math.max(1, S * 0.007);
+    g = ctx.createLinearGradient(0, cy - Rd, 0, cy + Rd);
+    var rimCol = mix([255, 255, 255], cur.halo, 0.35);
+    g.addColorStop(0, rgba(rimCol, 0.34));
+    g.addColorStop(0.5, rgba(rimCol, 0.08));
+    g.addColorStop(1, rgba(rimCol, 0.2));
+    ctx.strokeStyle = g;
+    ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.arc(cx, cy, Rd - lw / 2, 0, TAU); ctx.stroke();
+  }
+
+  // point on a tilted orbit -> [x, y, z, persp] in pixels (pre-roll)
+  var _op = [0, 0, 0, 1];
+  function orbitPoint(phi, ci, si, cT, sT, Rc, rad) {
+    var x = Math.cos(phi), z = Math.sin(phi), y = 0;
+    // incline orbit plane around z
+    var x1 = x * ci - y * si, y1 = x * si + y * ci, z1 = z;
+    // global tilt around x
+    var y2 = y1 * cT - z1 * sT, z2 = y1 * sT + z1 * cT;
+    var p = CAM / (CAM - z2 * rad);
+    _op[0] = x1 * Rc * p; _op[1] = y2 * Rc * p; _op[2] = z2; _op[3] = p;
+    return _op;
+  }
+
+  // ---------------------------------------------------------------- loop
+  var raf = 0, lastDraw = 0;
+  function frame(now) {
+    raf = requestAnimationFrame(frame);
+    // ~30 fps; 15 fps when motion is reduced or the orb is offline (motion is nearly still there).
+    var fps = (reduced || stateName === 'offline') ? 15 : 30;
+    var minDt = 1000 / fps;
+    if (lastDraw && now - lastDraw < minDt - 2) return;
+    var dt = lastDraw ? Math.min(0.1, (now - lastDraw) / 1000) : 1 / fps;
+    lastDraw = now;
+    update(dt);
+    draw();
+  }
+  function start() {
+    if (raf || document.hidden) return;
+    lastDraw = 0;
+    raf = requestAnimationFrame(frame);
+  }
+  function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+  document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else start(); });
+
+  // ---------------------------------------------------------------- API
+  function snapAll() {
+    cur = clonePreset(tgt);
+    for (var q = 0; q < 3; q++) cometA[q] = q < nComets ? 1 : 0;
+  }
+
+  function setState(state, info, snap) {
+    info = info || {};
+    var running = Math.max(0, Math.floor(Number(info.running) || 0));
+    var approvals = Math.max(0, Math.floor(Number(info.approvals) || 0));
+    if (!PRESETS[state]) state = approvals > 0 ? 'attention' : running > 0 ? 'working' : 'idle';
+    stateName = state;
+    tgt = PRESETS[state];
+    nComets = state === 'working' ? Math.min(3, Math.max(1, running)) : 0;
+
+    // Only refresh chip contents while visible, so a fading-out chip keeps its last value.
+    var showBadge = state === 'attention';
+    if (showBadge) {
+      badgeEl.textContent = approvals > 0 ? (approvals > 9 ? '9+' : String(approvals)) : '';
+      badgeEl.classList.toggle('dot', approvals <= 0);
+    }
+    badgeEl.classList.toggle('on', showBadge);
+
+    var showPip = state === 'working' && running >= 2;
+    if (showPip) pipEl.textContent = running > 9 ? '9+' : String(running);
+    pipEl.classList.toggle('on', showPip);
+
+    offEl.classList.toggle('on', state === 'offline');
+    canvas.style.opacity = state === 'offline' ? '0.82' : '1';
+    document.documentElement.setAttribute('data-state', state);
+
+    if (snap) { snapAll(); draw(); }
+  }
+
+  function readHash(snap) {
+    var h = (location.hash || '').replace(/^#/, '');
+    if (!h) return false;
+    var params = {};
+    h.split('&').forEach(function (kv) {
+      var i = kv.indexOf('=');
+      if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+    });
+    if (!params.state && params.running == null && params.approvals == null) return false;
+    if (snap && params.from && PRESETS[params.from]) setState(params.from, { running: params.running, approvals: params.approvals }, true);
+    setState(params.state, { running: params.running, approvals: params.approvals }, snap && !(params.from && PRESETS[params.from]));
+    // Optional &t=<seconds>: pre-advance the simulation (deterministic screenshots / transition checks).
+    if (snap && params.t != null && isFinite(+params.t)) warmup = Math.max(0, Math.min(30, +params.t));
+    return true;
+  }
+
+  window.cairnAvatar = {
+    setState: function (state, info) { setState(state, info, false); }
+  };
+  window.addEventListener('hashchange', function () { readHash(false); });
+
+  var warmup = 1.6;
+  resize();
+  // warm up phases so the first frame is not a perfectly aligned lattice
+  spin = 0.8; breathPh = 1.2; T = 3;
+  if (!readHash(true)) setState('idle', { running: 0, approvals: 0 }, true);
+  for (var w = 0; w < warmup * 30; w++) update(1 / 30);
+  draw();
+  start();
+})();
+</script>
+</body>
+</html>

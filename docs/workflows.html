@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workflow diagrams — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Workflow diagrams</h1>
+    <p class="lead">Sixteen numbered figures cover every important flow in Cairn: crawling, fetching, robots.txt evaluation, politeness, indexing, answering, deep research, signing, streaming and site-owner opt-out. Each figure has a caption and a short list of steps.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#legend">Legend — how to read the diagrams</a></li>
+      <li><a href="#f1">Figure 1 — End-to-end crawl lifecycle</a></li>
+      <li><a href="#f2">Figure 2 — Fetch pipeline</a></li>
+      <li><a href="#f3">Figure 3 — robots.txt decision algorithm</a></li>
+      <li><a href="#f4">Figure 4 — Robots cache state machine</a></li>
+      <li><a href="#f5">Figure 5 — Politeness and backoff state machine</a></li>
+      <li><a href="#f6">Figure 6 — Redirect handling with per-hop robots re-check</a></li>
+      <li><a href="#f7">Figure 7 — Page outcome decision tree</a></li>
+      <li><a href="#f8">Figure 8 — Crawl job states</a></li>
+      <li><a href="#f9">Figure 9 — Indexing pipeline</a></li>
+      <li><a href="#f10">Figure 10 — Quick answer (RAG)</a></li>
+      <li><a href="#f11">Figure 11 — Deep research agent loop</a></li>
+      <li><a href="#f12">Figure 12 — Web Bot Auth signing and verification</a></li>
+      <li><a href="#f13">Figure 13 — SSE streaming for ask and crawl</a></li>
+      <li><a href="#f14">Figure 14 — CLI demo flow</a></li>
+      <li><a href="#f15">Figure 15 — Site-owner opt-out</a></li>
+      <li><a href="#f16">Figure 16 — Corpus vs search role separation</a></li>
+    </ol></div>
+
+    <h2 id="legend">Legend — how to read the diagrams</h2>
+    <p>Three diagram types are used. <strong>Flowcharts</strong> show decisions and data flow. <strong>Sequence diagrams</strong> show messages between components over time, top to bottom. <strong>State diagrams</strong> show the lifecycle of one object. Colours mean the same thing in every figure.</p>
+
+    <div class="diagram-title">Legend</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef ext fill:#f1f5f9,stroke:#64748b,color:#1e293b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+  classDef proc fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+
+  L1(["Start or terminal step"]) --> L2["Cairn step or component"]:::core
+  L2 --> L3{"Decision"}
+  L3 -->|"edge label = condition"| L4[("Data store")]:::store
+  L3 -.->|"dashed = spawn, network or async"| L5["External system"]:::ext
+  L6["Separate OS process"]:::proc
+  L7(["Success or allowed"]):::good
+  L8(["Blocked, refused or failed"]):::bad
+    </pre></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Notation</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>Solid arrow <code>A --&gt; B</code></td><td>In-process call or data flow</td></tr>
+        <tr><td>Dashed arrow</td><td>Process spawn, network hop, or a later or asynchronous step</td></tr>
+        <tr><td>Sequence <code>-&gt;&gt;</code> / <code>--&gt;&gt;</code></td><td>Request / response or event. <code>loop</code>, <code>alt</code>/<code>else</code> and <code>opt</code> boxes mark repetition, branches and optional steps.</td></tr>
+        <tr><td>State <code>[*]</code></td><td>Initial or final pseudo-state</td></tr>
+        <tr><td>Numbered arrows</td><td>Sequence diagrams use <code>autonumber</code>. The numbers match the step lists under each figure where it helps.</td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============================================================ 1 -->
+    <h2 id="f1">1. End-to-end crawl lifecycle</h2>
+    <div class="diagram-title">Figure 1 — End-to-end crawl lifecycle</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+
+  START(["POST /api/crawl or cairn crawl URL"])
+  CREATE["JobManager.create(opts)<br/>id job-n-base36time, state queued"]:::core
+  SEEDROBOTS["For each seed origin<br/>fetcher.checkRobots(seed, role)"]:::core
+  SITEMAPS["Collect Sitemap: lines from robots.txt<br/>plus /sitemap.xml when useSitemaps"]:::core
+  SMPARSE["parseSitemap()<br/>follow sitemap indexes up to 3 levels, cap 1000 URLs"]:::core
+  FRONTIER[("BFS frontier<br/>seeds at depth 0, sitemap URLs at depth 1")]:::store
+  MORE{"Frontier empty or<br/>maxPages reached?"}
+  FETCH["fetcher.fetch(url, {role})<br/>robots, politeness, signing, audit inside"]:::core
+  CLASSIFY{"Classify outcome<br/>see Figure 7"}
+  INDEXIT["role search: index.add(doc)<br/>then index.scheduleSave()"]:::core
+  COLLECT["role corpus: append JSONL<br/>corpus/jobId.jsonl"]:::core
+  RECORD["Update counts, recent list<br/>emit page event"]:::core
+  FOLLOW{"Page has links and<br/>is not nofollow?"}
+  ENQUEUE["Enqueue new in-scope URLs<br/>normalised, deduplicated, depth + 1"]:::core
+  FINISHED(["state done<br/>emit done"]):::good
+  CANCELLED(["state cancelled"]):::bad
+
+  START --> CREATE --> SEEDROBOTS --> SITEMAPS --> SMPARSE --> FRONTIER
+  FRONTIER --> MORE
+  MORE -->|yes| FINISHED
+  MORE -->|no| FETCH --> CLASSIFY
+  CLASSIFY -->|indexed| INDEXIT --> RECORD
+  CLASSIFY -->|collected| COLLECT --> RECORD
+  CLASSIFY -->|"blocked-robots, error, http-x,<br/>skipped-type, noindex, duplicate"| RECORD
+  RECORD --> FOLLOW
+  FOLLOW -->|yes| ENQUEUE --> FRONTIER
+  FOLLOW -->|no| FRONTIER
+  CREATE -.->|"cancel() at any time"| CANCELLED
+    </pre></div>
+    <p class="diagram-caption">A crawl is a breadth-first walk seeded from the start URLs and from sitemaps. All waiting happens inside the fetcher's scheduler, so the crawler loop has no sleeps of its own.</p>
+    <ol>
+      <li>A job is created from the API or CLI. Its options default to <code>config.crawl</code> (maxPages 50, maxDepth 2, sameSiteOnly, useSitemaps, concurrency 4).</li>
+      <li>Robots.txt is fetched once for each seed origin. Its <code>Sitemap:</code> lines and <code>/sitemap.xml</code> seed the frontier.</li>
+      <li>Up to <code>concurrency</code> URLs are fetched at a time. Each fetch result is turned into exactly one outcome.</li>
+      <li>Pages that can be indexed go to the search index (search role) or to a JSONL file (corpus role), never both.</li>
+      <li>Links are followed unless the page is <code>nofollow</code> or the link has <code>rel=nofollow</code>. They must stay in scope (same site, include/exclude patterns) and under <code>maxDepth</code>.</li>
+    </ol>
+
+    <!-- ============================================================ 2 -->
+    <h2 id="f2">2. Fetch pipeline</h2>
+    <div class="diagram-title">Figure 2 — Fetch pipeline (Fetcher.fetch)</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Caller (crawler, API, MCP tool)
+  participant F as Fetcher
+  participant R as RobotsCache
+  participant H as HostScheduler
+  participant S as Signer
+  participant W as Website
+  participant A as AuditLog
+
+  C->>F: fetch(url, {role, respectRobots})
+  F->>F: normalizeUrl, scheme check,<br/>optional private-network block
+  opt respectRobots and path is not /robots.txt
+    F->>R: check(url, role)
+    R-->>F: allowed, rule, crawlDelay
+  end
+  alt disallowed by robots.txt
+    F->>A: record fetch entry,<br/>blocked robots, status null
+    F-->>C: FetchResult ok false,<br/>blocked.reason robots
+  else allowed
+    loop each hop, at most maxRedirects (5)
+      loop attempt, up to 1 + config.fetch.retries
+        F->>H: schedule(host, fn, {crawlDelaySec})
+        H-->>F: slot granted after minDelay,<br/>Crawl-delay and backoff
+        F->>S: signRequest({method GET, url})
+        S-->>F: Signature-Agent, Signature-Input, Signature
+        F->>W: GET with User-Agent, From, Accept,<br/>Accept-Language, signature headers
+        W-->>F: status, headers,<br/>body capped at maxBytes
+        F->>A: record fetch entry (status, bytes,<br/>elapsedMs, signed, attempt)
+        alt 429, 503, other 5xx or network error
+          F->>H: penalize(host, Retry-After in ms)
+        else any other status
+          F->>H: reward(host)
+        end
+      end
+      opt 3xx with Location
+        F->>R: check(next URL, role), loads that<br/>origin's robots.txt if new
+      end
+    end
+    F-->>C: FetchResult (finalUrl, redirects,<br/>body, contentType, xRobotsTag)
+  end
+    </pre></div>
+    <p class="diagram-caption">All network access goes through this one pipeline. Robots.txt is checked before the first request and again on every redirect hop. Every attempt is scheduled per host, signed, and written to the audit log.</p>
+    <ol>
+      <li>The URL is normalised, and schemes other than http(s) are rejected (<code>blocked.reason = 'scheme'</code>). Private-network targets are rejected only if <code>fetch.blockPrivateNetworks</code> is set.</li>
+      <li>The robots decision uses <code>robotsTokens(role)</code>. For the <code>user</code> role it is skipped only when <code>robots.respectForUserFetch</code> is false.</li>
+      <li>The scheduler enforces delay, concurrency and backoff. The signer adds Web Bot Auth headers when <code>signing.enabled</code> is true.</li>
+      <li>The body is read up to <code>maxBytes</code> (and flagged <code>truncated</code> if cut) under an AbortController timeout. It is decoded using the <code>charset</code> when possible.</li>
+      <li>Retryable failures are penalised and retried. Redirects are followed by hand so each hop can be checked (Figure 6).</li>
+    </ol>
+
+    <!-- ============================================================ 3 -->
+    <h2 id="f3">3. robots.txt decision algorithm</h2>
+    <div class="diagram-title">Figure 3 — RobotsTxt.isAllowed(tokens, url)</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+
+  IN(["isAllowed(tokens, url)<br/>tokens = [CairnSearch, Cairn]"])
+  RTXT{"Path is /robots.txt?"}
+  TOK1{"Group whose User-agent equals the role token<br/>or starts with token + '/'?"}
+  TOK2{"Group for family token Cairn?"}
+  STAR{"Any User-agent: * group?"}
+  MERGE["Merge all groups for the matched token<br/>drop empty Disallow lines"]:::core
+  NORM["Normalise percent-encoding on path+query and patterns<br/>decode unreserved characters, uppercase hex"]:::core
+  MATCH["Test every rule<br/>* matches any sequence, trailing $ anchors the end"]:::core
+  ANY{"Any rule matched?"}
+  LONGEST["Keep the longest matching pattern<br/>length in octets"]:::core
+  TIE{"Allow and Disallow<br/>of equal length?"}
+  WINNER{"Longest rule is Allow?"}
+  OKROBOTS(["allowed, always"]):::good
+  OKNOGROUP(["allowed, no applicable group"]):::good
+  OKNORULE(["allowed, no rule matched"]):::good
+  OKTIE(["allowed, allow wins the tie"]):::good
+  OKALLOW(["allowed by the Allow rule"]):::good
+  DENY(["disallowed<br/>rule reported to caller and audit"]):::bad
+
+  IN --> RTXT
+  RTXT -->|yes| OKROBOTS
+  RTXT -->|no| TOK1
+  TOK1 -->|yes| MERGE
+  TOK1 -->|no| TOK2
+  TOK2 -->|yes| MERGE
+  TOK2 -->|no| STAR
+  STAR -->|yes| MERGE
+  STAR -->|no| OKNOGROUP
+  MERGE --> NORM --> MATCH --> ANY
+  ANY -->|no| OKNORULE
+  ANY -->|yes| LONGEST --> TIE
+  TIE -->|yes| OKTIE
+  TIE -->|no| WINNER
+  WINNER -->|yes| OKALLOW
+  WINNER -->|no| DENY
+    </pre></div>
+    <p class="diagram-caption">RFC 9309 semantics: only one group applies. It is the most specific token that has any group, and a role-specific group completely replaces the <code>*</code> group rather than adding to it. Within that group, the longest matching pattern wins, and <code>Allow</code> wins a tie.</p>
+    <ol>
+      <li>Try the tokens in order: role token (<code>CairnSearch</code>, <code>CairnCorpus</code> or <code>Cairn-User</code>), then <code>Cairn</code>, then <code>*</code>.</li>
+      <li>Match against the path plus query. Both sides are percent-normalised first.</li>
+      <li>Among the rules that match, pick the one with the longest pattern. On equal length, Allow wins.</li>
+      <li>If no rule matches, or no group applies, the URL is allowed.</li>
+    </ol>
+    <p>Worked examples against the demo site's robots.txt (<code>*</code> disallows <code>/private/</code> and <code>/admin/</code>; <code>CairnSearch</code> has its own group; <code>CairnCorpus</code> has <code>Disallow: /</code>):</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Role</th><th>URL path</th><th>Group used</th><th>Winning rule</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>search</td><td><code>/private/public-note.html</code></td><td>CairnSearch</td><td><code>Allow: /private/public-note.html</code> (longer than <code>/private/</code>)</td><td><span class="badge good">allowed</span></td></tr>
+        <tr><td>search</td><td><code>/private/secret.html</code></td><td>CairnSearch</td><td><code>Disallow: /private/</code></td><td><span class="badge bad">disallowed</span></td></tr>
+        <tr><td>search</td><td><code>/file.pdf</code></td><td>CairnSearch</td><td><code>Disallow: /*.pdf$</code></td><td><span class="badge bad">disallowed</span></td></tr>
+        <tr><td>search</td><td><code>/search?q=x</code></td><td>CairnSearch</td><td><code>Disallow: /search?</code></td><td><span class="badge bad">disallowed</span></td></tr>
+        <tr><td>search</td><td><code>/admin/index.html</code></td><td>CairnSearch (the <code>*</code> group is not consulted)</td><td>none</td><td><span class="badge good">allowed</span></td></tr>
+        <tr><td>corpus</td><td><code>/about.html</code></td><td>CairnCorpus</td><td><code>Disallow: /</code></td><td><span class="badge bad">disallowed</span></td></tr>
+        <tr><td>corpus</td><td><code>/robots.txt</code></td><td>n/a</td><td>always allowed</td><td><span class="badge good">allowed</span></td></tr>
+        <tr><td>user</td><td><code>/admin/index.html</code></td><td><code>*</code> (no Cairn-User or Cairn group)</td><td><code>Disallow: /admin/</code></td><td><span class="badge bad">disallowed</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============================================================ 4 -->
+    <h2 id="f4">4. Robots cache state machine</h2>
+    <div class="diagram-title">Figure 4 — RobotsCache entry lifecycle (per origin)</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  state "Absent" as Absent
+  state "Fetching" as Fetching
+  state "Fresh (parsed rules)" as Fresh
+  state "Fresh (allow all)" as AllowAll
+  state "Stale (old copy reused)" as Stale
+  state "Failed (disallow all)" as Failed
+  state "Expired" as Expired
+
+  [*] --> Absent
+  Absent --> Fetching : get() miss
+  Fetching --> Fresh : 2xx
+  Fetching --> AllowAll : 4xx
+  Fetching --> Stale : 429, 5xx, network, old copy exists
+  Fetching --> Failed : 429, 5xx, network, no old copy
+  Fresh --> Expired : TTL elapsed
+  AllowAll --> Expired : TTL elapsed
+  Expired --> Fetching : next get()
+  Stale --> Fetching : after 10 min max
+  Failed --> Fetching : after 10 min max
+
+  note right of Fetching
+    One shared in-flight request per origin.
+    Concurrent get() calls await the same promise.
+  end note
+  note left of Failed
+    A server error is not permission.
+    Cairn assumes full disallow
+    until robots.txt is readable.
+  end note
+  note right of Expired
+    TTL = robots.cacheTtlMs (default 24 h).
+    invalidate(origin) or clear() returns
+    any state to Absent.
+  end note
+    </pre></div>
+    <p class="diagram-caption">The cache is keyed by origin (scheme, host and port). Failures are cached for no more than 10 minutes, so a site recovering from an outage is re-read quickly. A 4xx means "no robots.txt", which RFC 9309 treats as allow-all.</p>
+    <ol>
+      <li>The first <code>get()</code> for an origin fetches <code>/robots.txt</code> through <code>fetchRaw</code> with <code>kind: 'robots'</code>, so the request is signed, rate-limited and audited.</li>
+      <li>Each result records <code>status</code>, <code>fetchedAt</code>, <code>expiresAt</code> and a <code>source</code> of <code>network</code>, <code>cache</code> or <code>stale</code>.</li>
+      <li>If the site answers 429 or 5xx, or the request fails, Cairn keeps the rules it already had. It never falls back to allow-all.</li>
+      <li>Operators can force a re-read with <code>POST /api/robots/cache/clear</code>.</li>
+    </ol>
+
+    <!-- ============================================================ 5 -->
+    <h2 id="f5">5. Politeness and backoff state machine</h2>
+    <div class="diagram-title">Figure 5 — HostScheduler per-host states</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  state "Idle" as Idle
+  state "Waiting (FIFO queue)" as Waiting
+  state "In flight" as InFlight
+  state "Backoff" as Backoff
+
+  [*] --> Idle
+  Idle --> Waiting : schedule(host, fn, crawlDelaySec)
+  Waiting --> Waiting : before nextAllowedAt or backoffUntil
+  Waiting --> InFlight : delay elapsed, host slot and global slot free
+  InFlight --> Idle : fn settles, Fetcher calls reward(host)
+  InFlight --> Backoff : 429, 503, 5xx or network error, penalize(host, retryAfterMs)
+  Backoff --> Waiting : retry queued while backoffUntil is in the future
+  Backoff --> Idle : backoffUntil passed with no queued work
+
+  note right of Waiting
+    nextAllowedAt = lastStart + max(minDelayMs, crawlDelaySec x 1000)
+    The global slot is taken only after the host delay has elapsed.
+  end note
+  note right of Backoff
+    backoff = min(backoffBaseMs x 2^n, maxBackoffMs)
+    A larger Retry-After value wins.
+    reward(host) resets n to 0.
+  end note
+    </pre></div>
+    <p class="diagram-caption">Defaults: <code>minDelayMs</code> 1000, <code>maxConcurrencyPerHost</code> 1, <code>globalConcurrency</code> 8, <code>backoffBaseMs</code> 2000, <code>maxBackoffMs</code> 60000. A robots.txt <code>Crawl-delay</code> is respected whenever it is larger than the minimum delay.</p>
+    <ol>
+      <li>Requests for a host run in FIFO order. A request starts only once the host's delay and any backoff have passed.</li>
+      <li>A slow host never blocks other hosts, because a request does not hold a global concurrency slot while it waits.</li>
+      <li>Each consecutive failure doubles the backoff up to the cap. <code>Retry-After</code> (seconds or HTTP-date) can lengthen it further.</li>
+      <li><code>stats()</code> exposes <code>inFlight</code>, <code>queued</code>, <code>backoffMs</code> and <code>nextAllowedAt</code> per host, for <code>/api/stats</code>.</li>
+    </ol>
+
+    <!-- ============================================================ 6 -->
+    <h2 id="f6">6. Redirect handling with per-hop robots re-check</h2>
+    <div class="diagram-title">Figure 6 — Manual redirect loop</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+
+  RESP["Response for the current hop"]:::core
+  IS3XX{"3xx with a Location header?"}
+  UNDER{"Hops so far under maxRedirects (5)?"}
+  RESOLVE["Resolve Location against the current URL<br/>append {from, to, status} to redirects"]:::core
+  SCHEME{"http or https?"}
+  SAMEORIGIN{"Same origin as the current hop?"}
+  LOADROBOTS["RobotsCache.get(new origin)<br/>fetch its robots.txt if not cached"]:::core
+  ALLOWED{"isAllowed(role tokens, new URL)?"}
+  NEXTHOP["schedule, sign and GET the next hop"]:::core
+  FINAL(["Return FetchResult<br/>finalUrl = current URL"]):::good
+  TOOMANY(["error: too many redirects"]):::bad
+  BADSCHEME(["blocked: scheme"]):::bad
+  BLOCKED(["blocked: robots<br/>target is never requested"]):::bad
+
+  RESP --> IS3XX
+  IS3XX -->|no| FINAL
+  IS3XX -->|yes| UNDER
+  UNDER -->|no| TOOMANY
+  UNDER -->|yes| RESOLVE --> SCHEME
+  SCHEME -->|no| BADSCHEME
+  SCHEME -->|yes| SAMEORIGIN
+  SAMEORIGIN -->|yes| ALLOWED
+  SAMEORIGIN -->|"no, cross-origin"| LOADROBOTS --> ALLOWED
+  ALLOWED -->|no| BLOCKED
+  ALLOWED -->|yes| NEXTHOP --> RESP
+    </pre></div>
+    <p class="diagram-caption">Redirects are never followed automatically. An open redirect on an allowed page cannot be used to reach a disallowed page. The demo site's <code>/redirect-to-private</code> (302 to <code>/private/secret.html</code>) is blocked, and the site never sees a request for the secret page.</p>
+    <ol>
+      <li>Every hop is recorded in <code>FetchResult.redirects</code>, which the Fetch inspector shows.</li>
+      <li>A cross-origin hop loads that origin's robots.txt. Each origin's own rules apply to it.</li>
+      <li>The per-hop check applies whenever <code>respectRobots</code> is in effect, which is always for the search and corpus roles and by default for the user role.</li>
+      <li><code>fetchRaw</code> (used for robots.txt itself) follows at most 5 redirects and does no robots check.</li>
+    </ol>
+
+    <!-- ============================================================ 7 -->
+    <h2 id="f7">7. Page outcome decision tree</h2>
+    <div class="diagram-title">Figure 7 — How the crawler classifies each page</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+  classDef warn fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  RES(["FetchResult"])
+  QBLOCK{"blocked.reason is robots?"}
+  QERR{"error set, no status?"}
+  QSTATUS{"status is 2xx?"}
+  QTYPE{"content-type is HTML or text?"}
+  EXTRACT["extractHtml or extractText<br/>botTokens = robotsTokens(role)"]:::core
+  QNOINDEX{"noindex in meta robots<br/>or X-Robots-Tag?"}
+  QDUP{"contentHash already stored,<br/>or canonical URL already indexed?"}
+  QROLE{"Job role?"}
+  OBLOCK(["blocked-robots"]):::bad
+  OERR(["error"]):::bad
+  OHTTP(["http-status, e.g. http-404"]):::warn
+  OTYPE(["skipped-type"]):::warn
+  ONOINDEX(["noindex<br/>links still followed unless nofollow"]):::warn
+  ODUP(["duplicate"]):::warn
+  OINDEXED(["indexed<br/>index.add"]):::good
+  OCOLLECTED(["collected<br/>append to corpus JSONL"]):::good
+
+  RES --> QBLOCK
+  QBLOCK -->|yes| OBLOCK
+  QBLOCK -->|no| QERR
+  QERR -->|yes| OERR
+  QERR -->|no| QSTATUS
+  QSTATUS -->|no| OHTTP
+  QSTATUS -->|yes| QTYPE
+  QTYPE -->|"no, e.g. JSON or PDF"| OTYPE
+  QTYPE -->|yes| EXTRACT --> QNOINDEX
+  QNOINDEX -->|yes| ONOINDEX
+  QNOINDEX -->|no| QDUP
+  QDUP -->|yes| ODUP
+  QDUP -->|no| QROLE
+  QROLE -->|search| OINDEXED
+  QROLE -->|corpus| OCOLLECTED
+    </pre></div>
+    <p class="diagram-caption">Each fetched URL gets exactly one outcome. The outcome appears as a coloured chip in the dashboard's Crawl view and adds to the job's <code>counts</code>. Page-level signals are honoured per role: <code>&lt;meta name="CairnSearch" content="noindex"&gt;</code> and <code>X-Robots-Tag: CairnSearch: noindex</code> affect only the search role.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Outcome</th><th>Counter</th><th>Demo-site example</th></tr></thead>
+      <tbody>
+        <tr><td><code>blocked-robots</code></td><td><code>blockedRobots</code></td><td><code>/redirect-to-private</code> (its target <code>/private/secret.html</code> is disallowed), <code>/file.pdf</code></td></tr>
+        <tr><td><code>http-&lt;status&gt;</code></td><td><code>errors</code></td><td>a link to a missing page (404)</td></tr>
+        <tr><td><code>skipped-type</code></td><td><code>skipped</code></td><td><code>/data.json</code></td></tr>
+        <tr><td><code>noindex</code></td><td><code>noindex</code></td><td><code>/noindex.html</code> (meta), <code>/xrobots.html</code> (header)</td></tr>
+        <tr><td><code>duplicate</code></td><td><code>duplicates</code></td><td><code>/dup-content.html</code> (same text as post-1), <code>/canonical-dup.html</code></td></tr>
+        <tr><td><code>indexed</code> / <code>collected</code></td><td><code>indexed</code> / <code>collected</code></td><td><code>/products/ridgeback-45.html</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============================================================ 8 -->
+    <h2 id="f8">8. Crawl job states</h2>
+    <div class="diagram-title">Figure 8 — CrawlJob state diagram</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  state "queued" as Queued
+  state "done" as Done
+  state "cancelled" as Cancelled
+  state "error" as Errored
+
+  [*] --> Queued : JobManager.create(opts)
+  Queued --> Running : run() starts
+  Queued --> Cancelled : cancel()
+  state Running {
+    state "Seed robots.txt" as SeedRobots
+    state "Load sitemaps" as LoadSitemaps
+    state "Crawl frontier" as CrawlFrontier
+    [*] --> SeedRobots
+    SeedRobots --> LoadSitemaps
+    LoadSitemaps --> CrawlFrontier
+    CrawlFrontier --> CrawlFrontier : fetch, classify, enqueue
+    CrawlFrontier --> [*]
+  }
+  Running --> Done : frontier empty or maxPages reached
+  Running --> Cancelled : cancel(), no new fetches start
+  Running --> Errored : unexpected exception
+  Done --> [*]
+  Cancelled --> [*]
+  Errored --> [*]
+    </pre></div>
+    <p class="diagram-caption">A job's <code>status().state</code> is one of <code>queued</code>, <code>running</code>, <code>done</code>, <code>cancelled</code> or <code>error</code>. The terminal states are final. <code>JobManager</code> keeps the last 50 jobs, newest first.</p>
+    <ol>
+      <li>Each state change emits a <code>state</code> event with the full status. Each processed page emits a <code>page</code> event.</li>
+      <li>Reaching a terminal state emits <code>done</code>. <code>waitFor(id, timeoutMs)</code> resolves on that event.</li>
+      <li>After <code>cancel()</code>, no new fetches start. Fetches already in flight are allowed to finish or abort.</li>
+      <li>If an exception escapes, the job ends in <code>error</code> with its message in <code>status().error</code>.</li>
+    </ol>
+
+    <!-- ============================================================ 9 -->
+    <h2 id="f9">9. Indexing pipeline</h2>
+    <div class="diagram-title">Figure 9 — From fetched page to searchable passages</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+
+  subgraph INGEST["Index time"]
+    BODY["FetchResult body<br/>contentType, finalUrl"]:::core
+    EXT["extractHtml(body, finalUrl, {botTokens})<br/>title, text, markdown, headings, canonical"]:::core
+    DOC["doc: url, title, description, text, markdown,<br/>headings, lang, site, fetchedAt, role, canonical,<br/>noarchive, nosnippet"]:::core
+    HASH{"sha256(text) equals<br/>stored contentHash?"}
+    TOKS["tokenize(title) weighted x2.5<br/>tokenize(text)"]:::core
+    POSTINGS["BM25 postings<br/>term to docs with tf, doc lengths"]:::core
+    PASSAGES["Passages<br/>about 120 words, 20-word overlap"]:::core
+    PPOST["Passage postings for RAG"]:::core
+    SAVE["scheduleSave(1000 ms)<br/>debounced"]:::core
+    DISK[("data/index.json<br/>docs only, temp file then rename")]:::store
+    UNCHANGED(["unchanged"])
+    ADDED(["added or updated"]):::good
+  end
+  subgraph QUERY["Query time"]
+    Q["query text"]:::core
+    QT["tokenize(query)<br/>same function as for docs"]:::core
+    BM25["BM25 k1 1.2, b 0.75<br/>optional phrase and proximity bonus"]:::core
+    OUT(["results with a 30-word snippet<br/>or passages for RAG"]):::good
+  end
+
+  BODY --> EXT --> DOC --> HASH
+  HASH -->|yes| UNCHANGED
+  HASH -->|no| TOKS --> POSTINGS --> ADDED
+  HASH -->|no| PASSAGES --> PPOST --> ADDED
+  ADDED --> SAVE --> DISK
+  Q --> QT --> BM25 --> OUT
+  POSTINGS -.-> BM25
+  PPOST -.-> BM25
+    </pre></div>
+    <p class="diagram-caption">Only documents are saved to disk. Postings and passages are derived data, rebuilt by <code>load()</code> at startup. That keeps <code>index.json</code> small, readable and safe to write atomically.</p>
+    <ol>
+      <li>Extraction drops script, style, noscript, template, svg, iframe and head content, and honours <code>&lt;base href&gt;</code>.</li>
+      <li>The tokenizer lowercases, keeps Unicode letters and digits, removes stopwords and applies light stemming (plural s, es and ies; ing; ed).</li>
+      <li>If a page's text hash is unchanged, <code>add()</code> returns <code>unchanged</code> and nothing is rewritten.</li>
+      <li><code>nosnippet</code> documents return an empty snippet, and their text is never given to RAG.</li>
+    </ol>
+
+    <!-- ============================================================ 10 -->
+    <h2 id="f10">10. Quick answer (RAG)</h2>
+    <div class="diagram-title">Figure 10 — Quick answer sequence</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant UI as Web dashboard
+  participant API as HTTP API
+  participant ANS as answer.js
+  participant IDX as SearchIndex
+  participant CLJ as claude.js
+  participant CC as claude -p
+  participant AUD as AuditLog
+
+  U->>UI: types a question, Quick mode
+  UI->>API: EventSource GET<br/>/api/ask/stream (mode quick)
+  API->>ANS: answerQuestion(question,<br/>{runtime, onEvent})
+  ANS->>IDX: searchPassages(question,<br/>limit maxPassages)
+  IDX-->>ANS: passages<br/>[{url, title, text, score}]
+  ANS-->>UI: SSE retrieval (via API)
+  alt no relevant passages
+    ANS-->>ANS: answer says the index has<br/>nothing relevant, suggest a crawl
+  else passages found
+    ANS->>CLJ: runClaude(numbered sources, no tools)
+    CLJ->>CC: spawn, prompt on stdin
+    CC-->>CLJ: stream-json lines<br/>(assistant text, result)
+    CLJ-->>UI: SSE text chunks (via onEvent and API)
+    alt Claude unavailable or failed
+      ANS-->>ANS: extractive answer from top 3<br/>passages, usedClaude false
+    end
+  end
+  ANS->>AUD: record kind agent<br/>(mode quick, model, costUsd, ok)
+  ANS-->>API: answer, citations<br/>[{n, url, title}], passages
+  API-->>UI: SSE answer, then done
+  UI-->>U: answer with [n] citation links
+    </pre></div>
+    <p class="diagram-caption">In quick mode Claude has no tools. It sees only the numbered passages from the local index and is told to answer only from them, cite them as [n], and say when the sources do not contain the answer. The feature still works without Claude, in extractive mode.</p>
+    <ol>
+      <li>Retrieval is local and instant: BM25 over passages, up to <code>agent.maxPassages</code> (8).</li>
+      <li>The prompt reaches Claude on stdin, and the CLI runs in the empty <code>data/agent-work/</code> directory.</li>
+      <li>Only passages that are actually cited become citations. <code>nosnippet</code> pages contribute their title only.</li>
+      <li>Each answer is audited with its cost and duration.</li>
+    </ol>
+
+    <!-- ============================================================ 11 -->
+    <h2 id="f11">11. Deep research agent loop</h2>
+    <div class="diagram-title">Figure 11 — Deep research: UI, API, research.js, claude -p, MCP server, Cairn API, Fetcher, web</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant UI as Web dashboard
+  participant API as Cairn HTTP API
+  participant RS as research.js
+  participant CC as claude -p
+  participant MCP as mcp-server.js
+  participant FX as Fetcher
+  participant WEB as Website
+
+  UI->>API: GET /api/ask/stream (mode deep)
+  API->>RS: deepResearch(question,<br/>{runtime, apiUrl, onEvent})
+  RS->>RS: write MCP config and<br/>empty sources file (temp)
+  RS->>CC: spawn with --mcp-config,<br/>--strict-mcp-config,<br/>--allowedTools mcp__cairn__*
+  CC->>MCP: spawn node mcp-server.js<br/>(env CAIRN_API, CAIRN_SOURCES_FILE)
+  CC->>MCP: initialize, tools/list
+  MCP-->>CC: search_index, fetch_page, crawl_site,<br/>check_robots, index_stats
+  loop until Claude writes the final answer (bounded by budget and timeout)
+    alt search_index
+      CC->>MCP: tools/call search_index {query}
+      MCP->>API: POST /api/search
+      API-->>MCP: results
+      MCP-->>CC: hits labelled with source ids [n]
+    else fetch_page
+      CC->>MCP: tools/call fetch_page {url}
+      MCP->>API: POST /api/fetch<br/>{url, role user, index true}
+      API->>FX: fetch(url, role user)
+      FX->>FX: robots check with Cairn-User,<br/>then Cairn, then *
+      alt allowed by robots.txt
+        FX->>WEB: GET (signed,<br/>rate limited, audited)
+        WEB-->>FX: 200 HTML
+        FX-->>API: FetchResult, page indexed
+        API-->>MCP: title and markdown
+        MCP-->>CC: page text (at most 12k chars)<br/>as source [n]
+      else disallowed
+        FX-->>API: blocked robots,<br/>no request sent
+        API-->>MCP: blocked, with the matching rule
+        MCP-->>CC: refusal text - do not retry,<br/>choose another source
+      end
+    else crawl_site, check_robots or index_stats
+      CC->>MCP: tools/call
+      MCP->>API: POST /api/crawl then poll,<br/>POST /api/robots/check, or GET /api/stats
+      API-->>MCP: status
+      MCP-->>CC: summary text
+    end
+    CC-->>RS: stream-json tool_use<br/>and tool_result events
+    RS-->>UI: SSE tool and tool_result (via API)
+  end
+  CC-->>RS: result, markdown answer<br/>citing [n], cost
+  RS->>RS: read sources file, keep<br/>cited ids in citation order
+  RS-->>API: answer, citations,<br/>steps, costUsd
+  API-->>UI: SSE answer, then done
+    </pre></div>
+    <p class="diagram-caption">Claude plans the research, but every page it reads is fetched by Cairn as <code>Cairn-User</code>, under the same robots.txt, rate limits and audit as any other fetch. A robots refusal comes back as an ordinary tool result, and the system prompt tells Claude to respect it and move on.</p>
+    <ol>
+      <li>Claude's built-in tools are disabled (<code>--tools ''</code>). Only the five <code>mcp__cairn__*</code> tools are allowed, and <code>--strict-mcp-config</code> excludes all other MCP servers.</li>
+      <li>The system prompt says to search the index first, fetch pages only through tools, crawl small scopes (at most 25 pages, depth 2), and respect refusals.</li>
+      <li>Each URL that surfaces gets a stable <code>[n]</code> id. The MCP server keeps <code>CAIRN_SOURCES_FILE</code> up to date after every change.</li>
+      <li>Citations are the registry entries the final answer actually cites, in the order they are cited.</li>
+      <li>If the Claude CLI is unavailable, <code>deepResearch</code> reports a <code>status</code> event and falls back to a quick answer (Figure 10) instead of failing.</li>
+    </ol>
+
+    <!-- ============================================================ 12 -->
+    <h2 id="f12">12. Web Bot Auth signing and site-side verification</h2>
+    <div class="diagram-title">Figure 12 — Signing a request and verifying it on the site</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant SG as Signer (Cairn)
+  participant FX as Fetcher (Cairn)
+  participant SITE as Website verifier
+  participant DIR as Cairn key directory
+
+  Note over SG: init() loads or creates<br/>data/keys/ed25519 PEM files<br/>keyid = RFC 7638 JWK thumbprint<br/>(SHA-256, base64url)
+  FX->>SG: signRequest({method GET, url})
+  SG->>SG: build signature base from<br/>@authority, signature-agent,<br/>@signature-params
+  SG->>SG: Ed25519 sign
+  SG-->>FX: Signature-Agent,<br/>Signature-Input, Signature
+  FX->>SITE: GET /page with User-Agent<br/>and the three signature headers
+  SITE->>SITE: parse Signature-Input,<br/>require tag web-bot-auth
+  SITE->>SITE: check created and<br/>expires window (5 minutes)
+  SITE->>DIR: GET Signature-Agent URL +<br/>/.well-known/http-message-signatures-directory
+  DIR-->>SITE: JWKS, content-type<br/>application/http-message-signatures-directory+json
+  SITE->>SITE: find the key by keyid,<br/>rebuild the signature base,<br/>verify Ed25519
+  alt signature valid
+    SITE-->>FX: 200 (demo /signed-only returns<br/>verified true, keyid, agent)
+  else missing, expired, unknown key or bad signature
+    SITE-->>FX: 401
+  end
+    </pre></div>
+    <p class="diagram-caption">The signature covers the target authority and the <code>Signature-Agent</code> URL. It proves that the request came from whoever controls the key published at that URL. The verifier needs no shared secret, only an HTTPS GET for the key directory.</p>
+    <pre class="code"><code>Signature-Agent: "http://127.0.0.1:8787"
+Signature-Input: sig1=("@authority" "signature-agent");created=1759240000;expires=1759240300;keyid="&lt;jwk-thumbprint&gt;";alg="ed25519";nonce="&lt;base64&gt;";tag="web-bot-auth"
+Signature: sig1=:&lt;base64 ed25519 signature&gt;:
+
+# signature base (RFC 9421 §2.5), lines joined by \n, no trailing newline
+"@authority": example.com
+"signature-agent": "http://127.0.0.1:8787"
+"@signature-params": ("@authority" "signature-agent");created=1759240000;expires=1759240300;keyid="…";alg="ed25519";nonce="…";tag="web-bot-auth"</code></pre>
+    <ol>
+      <li>The key pair is created once, and the private key is stored with mode <code>0600</code>. The public key is published as a JWKS by the Cairn server.</li>
+      <li>Every request, including each redirect hop and each robots.txt fetch, is signed afresh with a new nonce and a 300-second lifetime.</li>
+      <li>Sites can verify with any RFC 9421 implementation. Operators can check headers locally with <code>POST /api/verify-signature</code>.</li>
+      <li>Setting <code>signing.enabled</code> to false sends no signature headers. The honest User-Agent is still sent.</li>
+    </ol>
+
+    <!-- ============================================================ 13 -->
+    <h2 id="f13">13. SSE streaming event flow (ask and crawl)</h2>
+    <div class="diagram-title">Figure 13 — Server-Sent Events for Ask and Crawl</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant UI as Browser EventSource
+  participant API as HTTP API and sse.js
+  participant AG as answer.js or research.js
+  participant JOB as CrawlJob
+
+  rect rgba(47, 111, 94, 0.08)
+    Note over UI,AG: Ask stream
+    UI->>API: GET /api/ask/stream?question=...
+    API->>AG: start with onEvent callback
+    AG-->>API: status
+    API-->>UI: event status
+    AG-->>API: retrieval (quick) or tool and tool_result (deep)
+    API-->>UI: event retrieval, tool, tool_result
+    AG-->>API: text chunks
+    API-->>UI: event text (repeated)
+    AG-->>API: final result
+    API-->>UI: event answer
+    API-->>UI: event done, then stream closes
+  end
+  rect rgba(59, 130, 246, 0.08)
+    Note over UI,JOB: Crawl stream
+    UI->>API: POST /api/crawl {seeds, role, maxPages}
+    API-->>UI: 201 {job}
+    UI->>API: GET /api/crawl/job-id/events
+    API->>JOB: subscribe to page, state, done
+    API-->>UI: event state (initial snapshot)
+    loop for every processed URL
+      JOB-->>API: page {url, outcome, status, title, depth}
+      API-->>UI: event page
+    end
+    JOB-->>API: state (on each state change)
+    API-->>UI: event state
+    JOB-->>API: done
+    API-->>UI: event done, then stream closes
+  end
+    </pre></div>
+    <p class="diagram-caption">SSE uses plain <code>text/event-stream</code> over the same loopback connection. The dashboard needs no WebSocket or polling. On a failure the server emits an <code>error</code> event, and the stream ends with <code>done</code>. The audit feed at <code>/api/audit/stream</code> works the same way, with one <code>entry</code> event per audit record.</p>
+    <pre class="code"><code>event: page
+data: {"jobId":"job-1-mg2k9x","url":"http://127.0.0.1:8788/about.html","outcome":"indexed","status":200,"title":"About Northwind Trails","depth":1}
+
+event: answer
+data: {"answer":"The Ridgeback 45 weighs 1.2 kg [1] …","citations":[{"n":1,"url":"…","title":"…"}]}
+
+event: done
+data: {}</code></pre>
+    <ol>
+      <li>Ask events: <code>status</code>, <code>retrieval</code>, <code>tool</code>, <code>tool_result</code>, <code>text</code>, <code>answer</code>, <code>error</code>, then <code>done</code>.</li>
+      <li>Crawl events: <code>page</code>, <code>state</code>, <code>done</code>. The dashboard updates its counters and outcome table live.</li>
+      <li>Event payloads are JSON. The UI renders them with DOM text nodes, never unescaped <code>innerHTML</code>.</li>
+      <li>Closing the tab closes the EventSource. The server then unsubscribes its listeners.</li>
+    </ol>
+
+    <!-- ============================================================ 14 -->
+    <h2 id="f14">14. CLI demo flow</h2>
+    <div class="diagram-title">Figure 14 — node bin/cairn.js demo</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef good fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef warn fill:#fef3c7,stroke:#b45309,color:#451a03
+
+  CMD(["node bin/cairn.js demo"])
+  TMP["Data dir: a fresh temp dir<br/>or --data-dir"]:::core
+  FIXTURE["startFixtureSite({port: 0})<br/>Northwind Trails on an ephemeral loopback port"]:::core
+  RUNTIME["createRuntime({dataDir, politeness: minDelayMs 200})"]:::core
+  CRAWL["1-2. Crawl the fixture as CairnSearch<br/>maxPages 60, maxDepth 5, live progress"]:::core
+  COUNTS["Print counts: indexed, blocked,<br/>noindex, duplicates, errors"]:::core
+  ROBOTS["3\. robots.txt decisions for /private/secret.html<br/>one line per role token"]:::core
+  SEARCH["4\. Search: ridgeback backpack weight<br/>top 3 results with snippets"]:::core
+  ASK["5\. Ask: How much does the Ridgeback 45 weigh<br/>and what is the return window?"]:::core
+  HASCLAUDE{"Claude CLI available<br/>and no --no-claude?"}
+  LLM["Answer written by Claude<br/>with [n] citations"]:::good
+  EXTRACTIVE["Extractive answer<br/>top passages, usedClaude false"]:::warn
+  SELFAUDIT{"Self-audit: re-check every path the<br/>fixture served against CairnSearch rules"}
+  CLEAN(["none were disallowed by robots.txt"]):::good
+  VIOLATION(["N were disallowed, printed in red"]):::warn
+  CLOSE(["runtime.close(), site.close()<br/>remove the temp dir unless --keep"])
+
+  CMD --> TMP --> FIXTURE --> RUNTIME --> CRAWL --> COUNTS --> ROBOTS --> SEARCH --> ASK --> HASCLAUDE
+  HASCLAUDE -->|yes| LLM --> SELFAUDIT
+  HASCLAUDE -->|no| EXTRACTIVE --> SELFAUDIT
+  SELFAUDIT -->|"0 violations"| CLEAN --> CLOSE
+  SELFAUDIT -->|"violations"| VIOLATION --> CLOSE
+    </pre></div>
+    <p class="diagram-caption">The demo runs the whole product against a local site that deliberately includes robots.txt edge cases, so you see real outcomes: <code>blocked-robots</code>, <code>noindex</code>, <code>duplicate</code> and sitemap-only pages. It works with or without the Claude CLI installed.</p>
+    <pre class="code"><code>$ node bin/cairn.js demo                # add --no-claude for the extractive path, --keep to keep data
+$ node bin/cairn.js doctor              # node version, claude availability, data dir, key
+$ node bin/cairn.js ask "How much does the Ridgeback 45 weigh?" --deep</code></pre>
+    <ol>
+      <li>The fixture binds to port 0 and the data directory is a throwaway temp dir, so the demo never clashes with a running <code>cairn serve</code> or your real index. Use <code>--keep</code> to keep the data, or <code>--data-dir</code> to choose it.</li>
+      <li>The crawl uses the real Fetcher, so it obeys the fixture's robots.txt exactly as it would a real site. Only the delay is shortened, to 200 ms per host.</li>
+      <li>The final self-audit replays every path the fixture actually received through <code>checkRobots(…, 'search')</code>. It is proof, from the server's side, that nothing disallowed was requested.</li>
+      <li><code>--no-claude</code> points the Claude binary at a path that does not exist, which forces the extractive answer path.</li>
+      <li><code>ask --deep</code> also starts an in-process API server on port 0 for the MCP bridge (Figure 11).</li>
+    </ol>
+
+    <!-- ============================================================ 15 -->
+    <h2 id="f15">15. Site-owner opt-out flow</h2>
+    <div class="diagram-title">Figure 15 — Opting out of the corpus role</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor SO as Site owner
+  participant SITE as Website
+  participant RC as RobotsCache
+  participant FX as Fetcher
+  actor OP as Cairn operator
+
+  SO->>SITE: add User-agent: CairnCorpus<br/>and Disallow: / to robots.txt
+  Note over RC: cached copy stays fresh until<br/>expiresAt (cacheTtlMs, default 24 h)
+  FX->>RC: check(url, corpus)
+  RC-->>FX: allowed (old rules)
+  opt operator wants the change applied now
+    OP->>RC: POST /api/robots/cache/clear
+  end
+  Note over RC: TTL elapsed or cache cleared
+  FX->>RC: check(url, corpus)
+  RC->>SITE: GET /robots.txt via fetchRaw<br/>(as CairnCorpus)
+  SITE-->>RC: 200 with the new rules
+  RC-->>FX: disallowed, rule Disallow: /
+  FX->>FX: blocked robots, audit entry,<br/>page never requested
+  Note over SITE,FX: CairnSearch and Cairn-User are unaffected<br/>unless their own groups disallow too
+    </pre></div>
+    <p class="diagram-caption">An opt-out takes effect the next time robots.txt is read. That happens at most one TTL (24 hours by default) after the edit, or at once if the operator clears the cache. A robots.txt outage cannot silently undo an opt-out, because failures reuse the last good copy (Figure 4).</p>
+    <ol>
+      <li>The site owner learns the tokens from the <code>/bot</code> page or from the <code>+…/bot</code> link in every User-Agent.</li>
+      <li>The owner edits robots.txt. Page-level <code>noindex</code> (meta or <code>X-Robots-Tag</code>) takes effect on the next fetch of that page.</li>
+      <li>The owner can check the result by looking for <code>blocked:'robots'</code> entries in the operator's audit log, or with the Robots tester.</li>
+      <li>The opt-out applies to future fetches. Documents already indexed can be removed with <code>DELETE /api/index/doc?url=</code> or from the Index view.</li>
+    </ol>
+
+    <!-- ============================================================ 16 -->
+    <h2 id="f16">16. Corpus vs search role separation</h2>
+    <div class="diagram-title">Figure 16 — One fetcher, three independently controllable roles</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  classDef core fill:#e6f2ee,stroke:#2f6f5e,color:#10352b
+  classDef store fill:#fef3c7,stroke:#b45309,color:#451a03
+  classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+
+  SEARCHJOB["Crawl job, role search<br/>UA token CairnSearch"]:::core
+  CORPUSJOB["Crawl job, role corpus<br/>UA token CairnCorpus"]:::core
+  USERFETCH["Ask, Fetch inspector, research agent<br/>UA token Cairn-User"]:::core
+  QS{"robots group for CairnSearch,<br/>else Cairn, else * allows?"}
+  QC{"robots group for CairnCorpus,<br/>else Cairn, else * allows?"}
+  QU{"robots group for Cairn-User,<br/>else Cairn, else * allows?"}
+  IDX[("Search index<br/>data/index.json")]:::store
+  CORPUS[("Corpus dataset<br/>data/corpus/jobId.jsonl")]:::store
+  VIEW["Returned to the user or agent<br/>indexed only when index is true"]:::core
+  ANSWERS["Ask answers with citations"]:::core
+  DATASET["Offline evaluation or training<br/>never used for search answers"]:::core
+  BS(["blocked-robots"]):::bad
+  BC(["blocked-robots"]):::bad
+  BU(["blocked, refusal"]):::bad
+
+  SEARCHJOB --> QS
+  CORPUSJOB --> QC
+  USERFETCH --> QU
+  QS -->|yes| IDX
+  QS -->|no| BS
+  QC -->|yes| CORPUS
+  QC -->|no| BC
+  QU -->|yes| VIEW
+  QU -->|no| BU
+  VIEW -.->|"index true"| IDX
+  IDX --> ANSWERS
+  CORPUS --> DATASET
+    </pre></div>
+    <p class="diagram-caption">This mirrors the split between OAI-SearchBot, GPTBot and ChatGPT-User. A site can appear in Cairn's answers while staying out of its datasets, or the reverse. Each role has its own robots token, User-Agent and output store. <code>User-agent: Cairn</code> covers every role that has no group of its own.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Role</th><th>Token</th><th>Trigger</th><th>Writes to</th><th>Opt out with</th></tr></thead>
+      <tbody>
+        <tr><td>search</td><td><code>CairnSearch</code></td><td>Automatic crawl jobs</td><td><code>data/index.json</code></td><td><code>User-agent: CairnSearch</code> / <code>Disallow: /</code></td></tr>
+        <tr><td>corpus</td><td><code>CairnCorpus</code></td><td>Explicit corpus crawl jobs only</td><td><code>data/corpus/&lt;jobId&gt;.jsonl</code></td><td><code>User-agent: CairnCorpus</code> / <code>Disallow: /</code></td></tr>
+        <tr><td>user</td><td><code>Cairn-User</code></td><td>A person's action (Ask, Fetch inspector, research agent)</td><td>Nothing by default. The index only when <code>index: true</code>.</td><td><code>User-agent: Cairn-User</code> / <code>Disallow: /</code>. Respected by default (<code>robots.respectForUserFetch</code>).</td></tr>
+      </tbody>
+    </table></div>
+    <pre class="code"><code># Stay in Cairn search answers, but keep content out of datasets
+User-agent: CairnCorpus
+Disallow: /
+
+User-agent: CairnSearch
+Allow: /</code></pre>
+    <ol>
+      <li>The corpus crawl never calls <code>index.add</code>, so dataset collection cannot leak into search results.</li>
+      <li>Search results and Ask answers never read from corpus files.</li>
+      <li>User-triggered fetches happen only because of a person's action. They are never used for automatic crawling.</li>
+    </ol>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

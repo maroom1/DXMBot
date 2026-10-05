@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Floating bubble app — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Floating bubble app</h1>
+    <p class="lead"><code>Cairn.app</code> is a small native macOS app (AppKit + WebKit, one Swift file) that puts Cairn Assistant on your desktop as a small <strong>animated avatar</strong> in an 88×88 window. There are three styles to choose from. The avatar floats above other windows on every Space and can be dragged anywhere. Click it, or Cairn's <strong>Dock icon</strong>, to open a chat panel. The app makes sure the Cairn server is running, and the avatar shows at a glance whether Cairn is idle, working, waiting for you or offline. If the server crashes, the app restarts it.</p>
+    <div class="callout"><strong>Quick start:</strong> <code>node bin/cairn.js desktop --install</code> builds the app, installs it as <code>/Applications/Cairn.app</code>, keeps it in the <strong>Dock</strong> and starts it. From then on, start Cairn whenever you need it from the Dock, Spotlight (⌘Space › Cairn), the Apps view (Launchpad) or the Applications folder. See <a href="#install">Install &amp; launch</a> and <a href="#dock">Dock icon and menu bar</a>.</div>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#look">What it looks like</a></li>
+      <li><a href="#avatars">Avatars and states</a> (<a href="#avatar-states">live state gallery</a>, <a href="#screenshots">screenshots</a>)</li>
+      <li><a href="#behaviour">Behaviours</a></li>
+      <li><a href="#dock">Dock icon and menu bar</a> (<a href="#dock-menu">Dock menu</a>, <a href="#dock-badge">badge</a>, <a href="#show-in-dock">Show in Dock</a>, <a href="#menu-bar">menu bar</a>, <a href="#dock-pin">pinning</a>)</li>
+      <li><a href="#indicators">Status indicators</a></li>
+      <li><a href="#lifecycle">Launch lifecycle</a></li>
+      <li><a href="#watchdog">Health polling and watchdog</a></li>
+      <li><a href="#interaction">Click vs drag</a></li>
+      <li><a href="#bridge">Native ↔ web bridge</a></li>
+      <li><a href="#always-on">Always on: what keeps running when</a></li>
+      <li><a href="#login">Start at Login</a></li>
+      <li><a href="#install">Install &amp; launch</a> (<a href="#launching">starting it</a>, <a href="#updating">updating</a>)</li>
+      <li><a href="#build">Build and run</a></li>
+      <li><a href="#state">Where state lives</a></li>
+      <li><a href="#troubleshooting">Troubleshooting</a></li>
+      <li><a href="#uninstall">Uninstall</a></li>
+    </ol></div>
+
+    <!-- ============================================================== -->
+    <h2 id="look">1. What it looks like</h2>
+    <p>By default the bubble sits in the top-right corner of your main screen, 16 px inside the visible area (below the menu bar). The chat panel opens next to it and flips sides to stay on screen. The mock-up shows the <em>Classic Bubble</em> style. The animated avatars that replace it by default are shown <a href="#avatars">below</a>.</p>
+    <div class="diagram-title">Figure 1 — Mock-up: Classic Bubble style with progress ring and approval badge, panel open</div>
+    <div class="diagram">
+      <svg viewBox="0 0 760 470" width="100%" role="img" aria-label="Mock-up of the Cairn bubble in the top-right corner of the screen with the chat panel open below it" xmlns="http://www.w3.org/2000/svg" style="max-width:760px;display:block;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+        <defs>
+          <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c7d2fe"/><stop offset="1" stop-color="#a7f3d0"/></linearGradient>
+          <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f6f5e"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+          <filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.25"/></filter>
+        </defs>
+        <!-- desktop -->
+        <rect x="0" y="0" width="760" height="470" rx="12" fill="url(#bg)"/>
+        <rect x="0" y="0" width="760" height="24" rx="0" fill="#ffffff" fill-opacity="0.75"/>
+        <text x="16" y="16" font-size="12" fill="#1d2330">Finder   File   Edit   View   Go   Window   Help</text>
+        <text x="660" y="16" font-size="12" fill="#1d2330">Wed 9:41 AM</text>
+        <!-- some other app window -->
+        <rect x="30" y="60" width="300" height="200" rx="10" fill="#ffffff" fill-opacity="0.85" filter="url(#sh)"/>
+        <circle cx="46" cy="74" r="5" fill="#f87171"/><circle cx="62" cy="74" r="5" fill="#fbbf24"/><circle cx="78" cy="74" r="5" fill="#4ade80"/>
+        <text x="46" y="110" font-size="12" fill="#5b6475">Any other app (Keynote, VS Code…)</text>
+        <text x="46" y="130" font-size="12" fill="#5b6475">The bubble stays above it, on every</text>
+        <text x="46" y="148" font-size="12" fill="#5b6475">Space and next to full-screen apps.</text>
+        <!-- chat panel -->
+        <g filter="url(#sh)">
+          <rect x="300" y="112" width="380" height="344" rx="14" fill="#ffffff"/>
+        </g>
+        <rect x="300" y="112" width="380" height="40" rx="14" fill="#f1f3f7"/>
+        <rect x="300" y="138" width="380" height="14" fill="#f1f3f7"/>
+        <rect x="314" y="122" width="20" height="20" rx="5" fill="url(#orb)"/>
+        <text x="319" y="137" font-size="12" fill="#ffffff">▲</text>
+        <text x="342" y="137" font-size="14" font-weight="700" fill="#1d2330">Cairn</text>
+        <circle cx="390" cy="132" r="4" fill="#15803d"/>
+        <text x="604" y="137" font-size="14" fill="#5b6475">＋  ⌂  –</text>
+        <!-- tabs -->
+        <text x="316" y="172" font-size="12" font-weight="700" fill="#2f6f5e">Chat</text>
+        <rect x="314" y="177" width="30" height="2" fill="#2f6f5e"/>
+        <text x="358" y="172" font-size="12" fill="#5b6475">Activity (2)</text>
+        <text x="434" y="172" font-size="12" fill="#5b6475">Tasks</text>
+        <text x="478" y="172" font-size="12" fill="#5b6475">Shopping</text>
+        <text x="542" y="172" font-size="12" fill="#5b6475">History</text>
+        <line x1="300" y1="182" x2="680" y2="182" stroke="#e2e6ee"/>
+        <!-- messages -->
+        <rect x="444" y="194" width="222" height="26" rx="12" fill="#3b82f6"/>
+        <text x="456" y="211" font-size="12" fill="#ffffff">Shop for a quiet vacuum under $250</text>
+        <rect x="314" y="228" width="250" height="26" rx="12" fill="#e6f2ee"/>
+        <text x="326" y="245" font-size="12" fill="#1d2330">🔎 Searching…  🌐 Browser: navigate</text>
+        <!-- approval card -->
+        <rect x="314" y="264" width="352" height="92" rx="10" fill="#fef3c7" stroke="#b45309"/>
+        <text x="328" y="284" font-size="12" font-weight="700" fill="#b45309">Approval needed</text>
+        <text x="328" y="302" font-size="12" fill="#1d2330">Click "Add to cart" in browser</text>
+        <text x="328" y="318" font-size="11" fill="#5b6475">mcp__playwright__browser_click · ref e42</text>
+        <rect x="328" y="328" width="66" height="20" rx="6" fill="#15803d"/><text x="339" y="342" font-size="11" fill="#ffffff">Approve</text>
+        <rect x="402" y="328" width="52" height="20" rx="6" fill="#b91c1c"/><text x="415" y="342" font-size="11" fill="#ffffff">Deny</text>
+        <rect x="462" y="328" width="86" height="20" rx="6" fill="#ffffff" stroke="#b45309"/><text x="472" y="342" font-size="11" fill="#b45309">Always allow</text>
+        <!-- composer -->
+        <rect x="314" y="410" width="304" height="32" rx="10" fill="#f7f8fa" stroke="#e2e6ee"/>
+        <text x="326" y="431" font-size="12" fill="#9aa3b2">Ask Cairn… (Enter to send)</text>
+        <rect x="626" y="410" width="40" height="32" rx="10" fill="#2f6f5e"/><text x="639" y="431" font-size="13" fill="#ffffff">➤</text>
+        <rect x="314" y="382" width="78" height="20" rx="10" fill="#e6f2ee"/><text x="324" y="396" font-size="11" fill="#2f6f5e">Remind me…</text>
+        <rect x="398" y="382" width="118" height="20" rx="10" fill="#e6f2ee"/><text x="408" y="396" font-size="11" fill="#2f6f5e">Search the web for…</text>
+        <rect x="522" y="382" width="66" height="20" rx="10" fill="#e6f2ee"/><text x="532" y="396" font-size="11" fill="#2f6f5e">Shop for…</text>
+        <!-- bubble -->
+        <circle cx="712" cy="72" r="38" fill="none" stroke="#ffffff" stroke-opacity="0.6" stroke-width="4"/>
+        <circle cx="712" cy="72" r="38" fill="none" stroke="#3b82f6" stroke-width="4" stroke-dasharray="80 160" stroke-linecap="round" transform="rotate(-90 712 72)"/>
+        <circle cx="712" cy="72" r="32" fill="url(#orb)" filter="url(#sh)"/>
+        <ellipse cx="712" cy="88" rx="15" ry="6" fill="#ffffff" fill-opacity="0.92"/>
+        <ellipse cx="712" cy="76" rx="11" ry="5" fill="#ffffff" fill-opacity="0.92"/>
+        <ellipse cx="712" cy="66" rx="8" ry="4" fill="#ffffff" fill-opacity="0.92"/>
+        <ellipse cx="712" cy="57" rx="5" ry="3" fill="#ffffff" fill-opacity="0.92"/>
+        <circle cx="738" cy="46" r="10" fill="#b91c1c" stroke="#ffffff" stroke-width="2"/>
+        <text x="734" y="50" font-size="11" font-weight="700" fill="#ffffff">1</text>
+        <!-- annotations -->
+        <text x="560" y="52" font-size="11" fill="#1d2330" text-anchor="end">progress ring: tasks running →</text>
+        <text x="560" y="68" font-size="11" fill="#1d2330" text-anchor="end">red badge: approvals waiting →</text>
+        <text x="560" y="84" font-size="11" fill="#1d2330" text-anchor="end">drag anywhere · click to open →</text>
+      </svg>
+    </div>
+    <p class="diagram-caption">A mock-up, not a screenshot, of the Classic Bubble: a stack of stones (a cairn) drawn with <code>NSBezierPath</code>, with a ring that animates while <code>runningRuns &gt; 0</code>. An animated avatar draws the same signals itself: activity while working and a red badge for approvals.</p>
+
+    <p>The same layout as ASCII, for terminals and plain-text notes:</p>
+    <pre class="code"><code>┌──────────────────────────────────────────────── menu bar ──┐
+│                                                   ╭────╮  ●1│  ← avatar window 88×88, 16 px inset
+│                                                   │ ◉  │    │    working = runs in progress
+│                                                   ╰────╯    │    badge = approvals waiting
+│                     ┌─────────────────────────────────┐     │
+│                     │ ▲ Cairn ●              ＋  ⌂  –  │     │  ← header (drag to move panel)
+│                     │ Chat │ Activity │ Tasks │ Shop │ …│     │
+│                     │            Shop for a vacuum… ▸ │     │
+│                     │ ◂ 🔎 Searching… 🌐 navigate     │     │
+│                     │ ┌ Approval needed ────────────┐ │     │
+│                     │ │ Click "Add to cart"         │ │     │
+│                     │ │ [Approve] [Deny] [Always]   │ │     │
+│                     │ └─────────────────────────────┘ │     │
+│                     │ [ Ask Cairn…              ] [➤] │     │  ← 400×620 panel, WKWebView
+│                     └─────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+
+    <!-- ============================================================== -->
+    <h2 id="avatars">2. Avatars and states</h2>
+    <p>The bubble is an <strong>animated avatar</strong>. Each style is an ordinary web page in <code>web/avatars/</code> that draws on a transparent canvas. The app shows it in a transparent <code>WKWebView</code> inside an 88×88 borderless window, so only the avatar itself is visible on your desktop. A transparent overlay view above the web view handles every click, drag, hover and right-click, so the avatar page never receives mouse events. <code>build.sh</code> copies the pages into <code>Cairn.app/Contents/Resources/avatars</code>, and the app loads them from there as local files. The avatar therefore keeps animating (in the <em>offline</em> state) while the server is down.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Style</th><th>File</th><th>Look</th><th>Renderer</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Aurora Orb</strong></td><td><code>web/avatars/avatar-aurora.html</code></td><td>A glass sphere filled with slowly flowing blue, cyan and violet clouds, with rim light and a soft glow. Comets orbit it while it works, one per running task, up to three.</td><td>WebGL, with a 2D canvas fallback</td></tr>
+        <tr><td><strong>Constellation Dots</strong></td><td><code>web/avatars/avatar-dots.html</code></td><td>A tilted disc of glowing points around a soft core. It breathes when idle, swirls with trailing comets while it works, turns warm orange with a wave when it needs you, and fades to grey when offline.</td><td>2D canvas</td></tr>
+        <tr><td><strong>Buddy</strong></td><td><code>web/avatars/avatar-buddy.html</code></td><td>A glossy, friendly blob with eyes. It focuses with a spinning ring while it works, opens its eyes wide and glows orange when it needs you, and sleeps (with a "z") when offline.</td><td>2D canvas</td></tr>
+        <tr><td>Classic Bubble</td><td>native, in <code>CairnBubble.swift</code></td><td>The original gradient circle with a stacked-stones glyph, progress ring and badge, drawn with Core Animation</td><td>AppKit. It is also the automatic fallback when an avatar page fails to load.</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Choosing a style:</strong> right-click the bubble → <strong>Avatar</strong> and pick one. The current style has a checkmark, and the default is marked <em>(default)</em>. The choice is saved in <code>UserDefaults</code> (<code>CairnAvatarStyle</code>) and applies straight away without a restart. The styles, their names and the default come from <code>web/avatars/index.json</code> (<code>{default, styles:[{key, file, name}]}</code>). The shipped file lists <code>aurora</code> (the default), <code>dots</code> and <code>buddy</code>. Without a valid <code>index.json</code>, every <code>avatar-*.html</code> in the folder is offered, named after its file, with the first one alphabetically as the default. <strong>Classic Bubble</strong> is always the last entry. To add a style, drop an <code>avatar-&lt;key&gt;.html</code> that implements <code>window.cairnAvatar.setState</code> into the folder, list it in <code>index.json</code>, and rebuild.</p>
+    <pre class="code"><code>Right-click ▸ Avatar ▸  ✓ Aurora Orb (default)
+                          Constellation Dots
+                          Buddy
+                          ─────────────
+                          Classic Bubble
+
+$ defaults write com.cairn.bubble CairnAvatarStyle buddy   # same choice from the terminal (keys from index.json)</code></pre>
+
+    <h3 id="avatar-mapping">How health maps to the avatar's state</h3>
+    <p>Every 3 seconds the app polls <code>GET /api/assistant/health</code>. It then calls <code>window.cairnAvatar.setState(state, {running, approvals})</code> on the avatar page. The first matching rule wins:</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>#</th><th>State</th><th>When</th><th>What you see</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>offline</code></td><td>The health request failed (server starting, crashed or unreachable)</td><td>The avatar dims and goes still, with a small grey dot (the Classic Bubble shows an amber dot)</td></tr>
+        <tr><td>2</td><td><code>attention</code></td><td><code>pendingApprovals &gt; 0</code>, or an <code>attention</code> message (a reminder fired, or an approval arrived) in the last 10 s</td><td>A pulse and a red badge with the number of approvals</td></tr>
+        <tr><td>3</td><td><code>working</code></td><td><code>runningRuns &gt; 0</code>. This count includes runs waiting for approval.</td><td>Faster motion, orbiting activity, and a small counter when two or more runs are active</td></tr>
+        <tr><td>4</td><td><code>listening</code></td><td>The chat panel is open</td><td>Brighter, with ripples, as if listening</td></tr>
+        <tr><td>5</td><td><code>idle</code></td><td>Otherwise</td><td>Slow, calm motion</td></tr>
+      </tbody>
+    </table></div>
+    <div class="diagram-title">Figure 2 — Health poll → avatar state</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  P["Every 3 s: GET /api/assistant/health"] --> R{"Reachable?"}
+  R -->|no| OFF["offline<br/>dimmed, grey dot"]
+  R -->|yes| A{"pendingApprovals &gt; 0<br/>or attention in last 10 s?"}
+  A -->|yes| ATT["attention<br/>pulse, red badge = approvals"]
+  A -->|no| W{"runningRuns &gt; 0?"}
+  W -->|yes| WRK["working<br/>activity, counter if 2 or more"]
+  W -->|no| L{"Chat panel open?"}
+  L -->|yes| LIS["listening"]
+  L -->|no| IDL["idle"]
+  OFF --> S["window.cairnAvatar.setState(state, running, approvals)"]
+  ATT --> S
+  WRK --> S
+  LIS --> S
+  IDL --> S
+    </pre></div>
+    <p class="diagram-caption">The avatar page draws its own badge, counter and offline dot. The native ring, badge and dot are used only while no avatar page is loaded (Classic Bubble or fallback). If the avatar's web content process crashes, the app reloads the page.</p>
+    <p>Every avatar page also accepts the state in its URL hash, which is how the gallery below and the <a href="../web/avatars/gallery.html">avatar gallery</a> preview them: <code>avatar-aurora.html#state=working&amp;running=2</code>, <code>#state=attention&amp;approvals=1</code>, <code>#state=offline</code>.</p>
+
+    <h3 id="avatar-states">Live state gallery</h3>
+    <style>
+      .avatar-states { border-collapse: collapse; }
+      .avatar-states td, .avatar-states th { text-align: center; vertical-align: middle; }
+      .avatar-states td:first-child, .avatar-states th:first-child { text-align: left; }
+      .avatar-states iframe { display: block; margin: 0 auto; width: 120px; height: 120px; border: 0; background: transparent; }
+    </style>
+    <p>These are the real avatar pages, running live in this page, one row per state.</p>
+    <div class="table-scroll"><table class="avatar-states">
+      <thead><tr><th>State</th><th>Aurora Orb</th><th>Constellation Dots</th><th>Buddy</th></tr></thead>
+      <tbody>
+        <tr><td><code>idle</code><br><small>nothing running</small></td>
+          <td><iframe src="../web/avatars/avatar-aurora.html#state=idle" width="120" height="120" title="Aurora Orb, idle" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-dots.html#state=idle" width="120" height="120" title="Constellation Dots, idle" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-buddy.html#state=idle" width="120" height="120" title="Buddy, idle" loading="lazy" allowtransparency="true"></iframe></td></tr>
+        <tr><td><code>working</code><br><small>2 runs active</small></td>
+          <td><iframe src="../web/avatars/avatar-aurora.html#state=working&amp;running=2" width="120" height="120" title="Aurora Orb, working with 2 runs" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-dots.html#state=working&amp;running=2" width="120" height="120" title="Constellation Dots, working with 2 runs" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-buddy.html#state=working&amp;running=2" width="120" height="120" title="Buddy, working with 2 runs" loading="lazy" allowtransparency="true"></iframe></td></tr>
+        <tr><td><code>attention</code><br><small>1 approval waiting</small></td>
+          <td><iframe src="../web/avatars/avatar-aurora.html#state=attention&amp;approvals=1" width="120" height="120" title="Aurora Orb, attention with 1 approval" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-dots.html#state=attention&amp;approvals=1" width="120" height="120" title="Constellation Dots, attention with 1 approval" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-buddy.html#state=attention&amp;approvals=1" width="120" height="120" title="Buddy, attention with 1 approval" loading="lazy" allowtransparency="true"></iframe></td></tr>
+        <tr><td><code>listening</code><br><small>chat panel open</small></td>
+          <td><iframe src="../web/avatars/avatar-aurora.html#state=listening" width="120" height="120" title="Aurora Orb, listening" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-dots.html#state=listening" width="120" height="120" title="Constellation Dots, listening" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-buddy.html#state=listening" width="120" height="120" title="Buddy, listening" loading="lazy" allowtransparency="true"></iframe></td></tr>
+        <tr><td><code>offline</code><br><small>server unreachable</small></td>
+          <td><iframe src="../web/avatars/avatar-aurora.html#state=offline" width="120" height="120" title="Aurora Orb, offline" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-dots.html#state=offline" width="120" height="120" title="Constellation Dots, offline" loading="lazy" allowtransparency="true"></iframe></td>
+          <td><iframe src="../web/avatars/avatar-buddy.html#state=offline" width="120" height="120" title="Buddy, offline" loading="lazy" allowtransparency="true"></iframe></td></tr>
+      </tbody>
+    </table></div>
+    <p class="diagram-caption">If the cells are empty, open this page from the project folder (for example <code>python3 -m http.server --directory .</code> in the project root, then <code>/docs/desktop.html</code>) or open the <a href="../web/avatars/gallery.html">avatar gallery</a> directly.</p>
+
+    <h3 id="screenshots">Screenshots</h3>
+    <style>
+      .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 14px 0 22px; }
+      .shots.wide { grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); }
+      .shots figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+      .shots figure > a { display: block; }
+      .shots figure img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border); }
+      .shots figcaption { color: var(--muted); font-size: 13.5px; line-height: 1.45; margin-top: 8px; }
+      .shots figcaption strong { color: var(--text); }
+    </style>
+    <p>Captures of the running app on the desktop, one per avatar style. The bubble window is transparent, so whatever is behind it (here a dark editor window) shows through around the avatar. Click any image to open it full size.</p>
+    <div class="shots">
+      <figure><a href="assets/screenshots/desktop-bubble-aurora.png"><img loading="lazy" src="assets/screenshots/desktop-bubble-aurora.png" width="260" height="260" alt="Aurora Orb bubble floating over a dark window"></a>
+        <figcaption><strong>Aurora Orb</strong> (the default), idle. A glass sphere of flowing blue and violet clouds with a soft glow.</figcaption></figure>
+      <figure><a href="assets/screenshots/desktop-bubble-dots.png"><img loading="lazy" src="assets/screenshots/desktop-bubble-dots.png" width="260" height="260" alt="Constellation Dots bubble floating over a dark window"></a>
+        <figcaption><strong>Constellation Dots</strong>, idle, in the same spot. A tilted disc of glowing points around a soft core.</figcaption></figure>
+      <figure><a href="assets/screenshots/desktop-bubble-buddy-offline.png"><img loading="lazy" src="assets/screenshots/desktop-bubble-buddy-offline.png" width="260" height="260" alt="Buddy bubble in the offline state: grey, eyes closed, with a z and a status dot"></a>
+        <figcaption><strong>Buddy, offline state.</strong> This was captured while the 8787 server was restarting, so it shows <code>offline</code>: grey, eyes closed, a "z" and the status dot. It went back to normal by itself once the server was reachable again.</figcaption></figure>
+    </div>
+    <p>The avatar state sheets below come from the avatar review. Each one shows the real avatar pages in transparent frames, as the native window shows them, with <code>running=2</code> and <code>approvals=1</code> where relevant.</p>
+    <div class="shots wide">
+      <figure><a href="assets/screenshots/avatar-gallery-dark.jpg"><img loading="lazy" src="assets/screenshots/avatar-gallery-dark.jpg" width="1200" height="1033" alt="Avatar gallery on a dark desktop: three styles in five states"></a>
+        <figcaption><strong>Avatar gallery, dark desktop</strong> (<a href="../web/avatars/gallery.html"><code>web/avatars/gallery.html</code></a>, 96 px). One row per style, one column per state: idle, working, attention, offline and listening. The large left column cycles through the states to show the transitions.</figcaption></figure>
+      <figure><a href="assets/screenshots/avatar-gallery-light.jpg"><img loading="lazy" src="assets/screenshots/avatar-gallery-light.jpg" width="1200" height="1033" alt="Avatar gallery on a light desktop: three styles in five states"></a>
+        <figcaption><strong>Avatar gallery, light desktop.</strong> The same gallery with the light desktop setting, which checks that each style still reads well on a pale background.</figcaption></figure>
+      <figure><a href="assets/screenshots/avatar-states-dark.jpg"><img loading="lazy" src="assets/screenshots/avatar-states-dark.jpg" width="1200" height="720" alt="State sheet on a dark background"></a>
+        <figcaption><strong>State sheet, dark background.</strong> Rows: Aurora Orb, Constellation Dots, Buddy. Columns: idle, working (2 runs, with the counter and orbiting comet), attention (red badge for 1 approval, warm orange), offline (grey, status dot) and listening (brighter, with ripples).</figcaption></figure>
+      <figure><a href="assets/screenshots/avatar-states-light.jpg"><img loading="lazy" src="assets/screenshots/avatar-states-light.jpg" width="1200" height="720" alt="State sheet on a light background"></a>
+        <figcaption><strong>State sheet, light background.</strong> The same 15 frames on a light background.</figcaption></figure>
+      <figure><a href="assets/screenshots/avatar-states-live-strip.jpg"><img loading="lazy" src="assets/screenshots/avatar-states-live-strip.jpg" width="680" height="1232" alt="Three captures of the state sheet taken seconds apart"></a>
+        <figcaption><strong>Motion over time.</strong> Three captures of the live sheet taken seconds apart. The clouds, comets, dots and ripples move between frames, while the badges and the offline frames stay put.</figcaption></figure>
+      <figure><a href="assets/screenshots/avatar-badges-zoom.jpg"><img loading="lazy" src="assets/screenshots/avatar-badges-zoom.jpg" width="990" height="330" alt="Close-up of the running counter, offline dot and approval badge"></a>
+        <figcaption><strong>Badges up close.</strong> The running counter on <code>working</code> (2), the status dot on <code>offline</code>, and the red approval badge on <code>attention</code> (1). Each avatar page draws these itself.</figcaption></figure>
+    </div>
+
+    <!-- ============================================================== -->
+    <h2 id="behaviour">3. Behaviours</h2>
+    <table>
+      <tr><th>Behaviour</th><th>How it works</th></tr>
+      <tr><td>Always on top</td><td>A borderless, <em>non-activating</em> <code>NSPanel</code> at <code>level = .floating</code>. Clicking the bubble does not take keyboard focus away from the app you are using.</td></tr>
+      <tr><td>On every Space</td><td><code>collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]</code>. The bubble follows you across desktops and appears next to full-screen apps.</td></tr>
+      <tr><td>Dock icon</td><td>A regular Dock app (<code>LSUIElement = false</code>, activation policy <code>.regular</code>): a Dock icon with a running dot, a ⌘Tab entry and a menu bar while Cairn is frontmost. Clicking the Dock icon opens the chat, its right-click menu has Open Chat, New Chat and more, and its badge counts pending approvals. Right-click the bubble → <strong>Show in Dock</strong> turns all of that off. See <a href="#dock">Dock icon and menu bar</a>.</td></tr>
+      <tr><td>Animated avatar</td><td>An 88×88 transparent window with the chosen avatar page in a <code>WKWebView</code>. A transparent overlay view on top owns all mouse handling. Hovering scales the avatar up slightly. Right-click → <strong>Avatar</strong> switches the style. See <a href="#avatars">Avatars and states</a>.</td></tr>
+      <tr><td>Drag anywhere</td><td>Press and drag the bubble to any place on any screen. When you let go, the position is saved in <code>UserDefaults</code> and restored at the next launch. It is clamped to the visible screens, so the bubble never gets lost after you unplug a monitor.</td></tr>
+      <tr><td>Click to expand</td><td>A click without movement toggles the chat panel: 400×620, rounded corners, with a <code>WKWebView</code> that loads <code>http://127.0.0.1:8787/web/bubble.html</code>.</td></tr>
+      <tr><td>Panel</td><td>It opens next to the bubble and flips so it stays on screen. You can move it by its header. <strong>Esc</strong> or a bubble click hides it. The web state (current chat, scroll, drafts) is kept while it is hidden.</td></tr>
+      <tr><td>⌥Space</td><td>Toggles the panel from any app. The global shortcut is on by default and can be turned off in the right-click menu (<em>Global Shortcut ⌥Space</em>). While Cairn is the active app it always works.</td></tr>
+      <tr><td>Right-click menu</td><td>Status lines (<em>N tasks running</em>, <em>N queued</em>, <em>N approvals waiting — Review…</em>, <em>Next task: …</em>, or a server problem). Then Open Chat / Hide Chat (⌥Space), Open Dashboard (<code>/</code> in your browser), Open Docs (<code>/docs/</code>). Then <strong>Start at Login</strong>, <strong>Show in Dock</strong>, <em>Open Chat on Alerts</em>, <em>Global Shortcut ⌥Space</em> (checkmark toggles), Reset Position and the <strong>Avatar</strong> submenu. Then Restart Server, Show Server Log and Quit Cairn (⌘Q).</td></tr>
+      <tr><td>Attention</td><td>When the web UI posts <code>attention</code> (a reminder fired, or an approval is needed), or the app sees a reminder on <code>/api/assistant/events</code>, the avatar switches to its <em>attention</em> state for 10 seconds and keeps it while approvals are pending. With <em>Open Chat on Alerts</em> on, the panel also opens automatically. While Cairn is in the background, its Dock icon bounces once.</td></tr>
+      <tr><td>Quit</td><td>Dock icon › Quit, ⌘Q (Cairn › Quit Cairn) or the bubble's Quit Cairn. Quitting also terminates the server child <em>if this app started it</em>. A server you started yourself keeps running. ⌘Q and the bubble's Quit Cairn ask first when background tasks are still running on a server Cairn started.</td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="dock">4. Dock icon and menu bar</h2>
+    <p>Cairn is a normal Dock app. While it runs, its Aurora Night icon sits in the Dock with a running dot, it appears in ⌘Tab, and the menu bar shows Cairn's menus whenever it is the frontmost app. The floating bubble works exactly as before: clicking it still does not take focus away from the app you are using.</p>
+    <table>
+      <tr><th>Action</th><th>What happens</th></tr>
+      <tr><td>Click the Dock icon</td><td>Brings the bubble back on screen (clamped to a visible display), opens the chat panel and puts the cursor in the message box, so you can start typing at once. If Cairn is already frontmost with the chat focused, the click hides the chat again, like a bubble click.</td></tr>
+      <tr><td>Click it while Cairn is hidden (⌘H)</td><td>Shows the bubble (and the chat, if it was open) again, without toggling anything.</td></tr>
+      <tr><td>Start it again while it runs</td><td>Spotlight, Launchpad, Finder, <code>open -a Cairn</code> and <code>node bin/cairn.js desktop</code> do the same as a Dock click. A second copy is never started.</td></tr>
+      <tr><td>Quit from the Dock</td><td>Right-click the Dock icon → Quit. The app stops a server it started, the same as every other way to quit.</td></tr>
+    </table>
+
+    <h3 id="dock-menu">Dock menu</h3>
+    <p>Right-click (or Control-click, or press and hold) the Dock icon:</p>
+    <table>
+      <tr><th>Item</th><th>Effect</th></tr>
+      <tr><td>Open Chat</td><td>Opens the chat panel next to the bubble and focuses the message box</td></tr>
+      <tr><td>New Chat</td><td>Opens the panel and starts a fresh conversation (<code>window.cairnBubble.newChat()</code>). If the panel is still loading, the call runs as soon as <code>bubble.js</code> reports <code>ready</code>.</td></tr>
+      <tr><td>Open Dashboard</td><td><code>http://127.0.0.1:8787/</code> in your browser</td></tr>
+      <tr><td>Open Docs</td><td><code>http://127.0.0.1:8787/docs/</code> in your browser</td></tr>
+      <tr><td><em>2 tasks running · 1 approval</em></td><td>Status line from the last health poll (greyed out). It reads <em>Starting the Cairn server…</em>, <em>Server unreachable</em> or the server problem while the server is not answering.</td></tr>
+      <tr><td>Start at Login</td><td>The same opt-in toggle as in the bubble menu (see <a href="#login">Start at Login</a>)</td></tr>
+      <tr><td><em>Options, Show All Windows, Hide, Quit</em></td><td>Added by macOS. <em>Options › Keep in Dock</em> pins or unpins the icon. <em>Options › Open at Login</em> is macOS's own login item. Use either it or Cairn's Start at Login, not both.</td></tr>
+    </table>
+
+    <h3 id="dock-badge">Badge and bounce</h3>
+    <ul>
+      <li><strong>Badge:</strong> the Dock icon shows a red badge with the number of approvals waiting for you (<code>pendingApprovals</code> from the 3-second health poll). The badge disappears at 0 and while the server is unreachable.</li>
+      <li><strong>Bounce:</strong> when a <em>new</em> approval arrives, or a reminder fires, while Cairn is in the background, the Dock icon bounces once (<code>requestUserAttention(.informationalRequest)</code>). One event bounces it only once, even though the event stream, the chat panel and the health poll all report it. Further bounces wait at least 5 seconds.</li>
+    </ul>
+
+    <h3 id="show-in-dock">Show in Dock</h3>
+    <p>Right-click the bubble → <strong>Show in Dock</strong> (checked by default). Turning it off makes Cairn a bubble-only accessory app straight away: no Dock icon, no menu bar and no ⌘Tab entry, with the bubble's right-click menu as the whole UI. Turning it on brings them back. The choice is stored as <code>CairnShowInDock</code> and applied at every launch. From Terminal: <code>defaults write com.cairn.bubble CairnShowInDock -bool NO</code> (or <code>YES</code>), then restart Cairn. With it off, a Dock tile you pinned stays in the Dock as a launcher, and the icon may flash in the Dock for a moment at launch before Cairn switches itself to an accessory app.</p>
+
+    <h3 id="menu-bar">Menu bar</h3>
+    <p>The <strong>Edit</strong> menu uses the standard first-responder actions. That is what makes copy, paste, select all and undo work inside the chat panel's web view.</p>
+    <table>
+      <tr><th>Menu</th><th>Items</th></tr>
+      <tr><td>Cairn</td><td>About Cairn · Open Dashboard… · Services · Hide Cairn ⌘H · Hide Others ⌥⌘H · Show All · Quit Cairn ⌘Q</td></tr>
+      <tr><td>Edit</td><td>Undo ⌘Z · Redo ⇧⌘Z · Cut ⌘X · Copy ⌘C · Paste ⌘V · Paste and Match Style ⌥⇧⌘V · Delete · Select All ⌘A</td></tr>
+      <tr><td>Window</td><td>Show Chat / Hide Chat ⌥Space · Close Chat ⌘W (closes the About window instead when that is in front) · Reload Chat ⌘R · Reset Bubble Position · Minimize ⌘M (only for windows that can be minimized; the bubble and the chat panel cannot) · Bring All to Front</td></tr>
+      <tr><td>Help</td><td>Cairn Docs (<code>/docs/</code>) · Floating Bubble App Guide (this page) · Show Server Log</td></tr>
+    </table>
+    <p>Hide Cairn hides the bubble and the panel too. Click the Dock icon, or press ⌥Space, to bring them back.</p>
+
+    <h3 id="dock-pin">Keeping it in the Dock</h3>
+    <p><code>install.sh</code>, and so <code>node bin/cairn.js desktop --install</code>, pins Cairn to the Dock once. After copying and registering the app, it checks <code>defaults read com.apple.dock persistent-apps</code> for a tile with the installed path (<code>/Applications/Cairn.app</code>, or <code>~/Applications/Cairn.app</code> when that is where it installed). If there is none, it appends one with <code>defaults write com.apple.dock persistent-apps -array-add …</code> and runs <code>killall Dock</code>, so the Dock restarts once to show it. If the tile is already there, the Dock is not touched. Re-running the install never adds a second tile.</p>
+    <pre class="code"><code>$ node bin/cairn.js desktop --install             # install, pin to the Dock (once) and start
+$ node bin/cairn.js desktop --install --no-dock   # install or update, leave the Dock alone
+$ bash desktop/install.sh --no-dock               # the same without the CLI (or CAIRN_NO_DOCK=1)</code></pre>
+    <ul>
+      <li><strong>Unpin:</strong> right-click the Cairn icon in the Dock → <strong>Options</strong> → uncheck <strong>Keep in Dock</strong>. While Cairn is not running, the item is <em>Options › Remove from Dock</em>, or you can drag the icon out of the Dock. A later <code>desktop --install</code> pins it again unless you add <code>--no-dock</code>.</li>
+      <li>The automatic update done by plain <code>node bin/cairn.js desktop</code> (or <code>bash desktop/run.sh</code>) never changes the Dock.</li>
+      <li><strong>Pin again:</strong> run <code>node bin/cairn.js desktop --install</code>, or drag Cairn from the Applications folder to the Dock. While it runs, you can also use Options › Keep in Dock.</li>
+    </ul>
+
+    <!-- ============================================================== -->
+    <h2 id="indicators">5. Status indicators</h2>
+    <p>Every 3 seconds the app polls <code>GET /api/assistant/health</code>, works out the avatar state (see <a href="#avatar-mapping">the mapping</a>) and updates the bubble:</p>
+    <table>
+      <tr><th>Indicator</th><th>Shown when</th><th>Source field</th></tr>
+      <tr><td><em>working</em> state: faster motion and orbiting activity. With the Classic Bubble, an animated progress ring.</td><td>At least one background run is working</td><td><code>runningRuns &gt; 0</code> (this count includes runs waiting for approval)</td></tr>
+      <tr><td>Small counter on the avatar</td><td>Two or more runs are active</td><td><code>runningRuns</code></td></tr>
+      <tr><td><em>attention</em> state: pulse and a red badge with a number</td><td>Approvals are waiting for you, or a reminder or approval just arrived</td><td><code>pendingApprovals</code>, <code>attention</code> message (10 s)</td></tr>
+      <tr><td><em>offline</em> state: dimmed avatar with a small grey dot</td><td>The server is unreachable</td><td>the health request failed</td></tr>
+      <tr><td><em>listening</em> state</td><td>The chat panel is open</td><td>panel visibility</td></tr>
+      <tr><td>Menu line "N tasks running"</td><td>Whenever you open the right-click menu</td><td><code>runningRuns</code></td></tr>
+      <tr><td>Dock badge with a number; one Dock bounce</td><td>Approvals are waiting. The bounce comes once for a new approval or a reminder while Cairn is in the background.</td><td><code>pendingApprovals</code>, <code>attention</code></td></tr>
+      <tr><td>Dock menu line "N tasks running · M approvals"</td><td>Whenever you open the Dock icon's menu</td><td><code>runningRuns</code>, <code>pendingApprovals</code></td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="lifecycle">6. Launch lifecycle</h2>
+    <div class="diagram-title">Figure 3 — Launch → health check → spawn server → bubble → panel</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  L["Cairn.app launches<br/>(Finder, run.sh, or login item)"] --> H{"GET 127.0.0.1:8787/api/health<br/>reachable?"}
+  H -->|yes| EXT["Use the existing server<br/>(started elsewhere, not owned)"]
+  H -->|no| SP["Spawn child Process:<br/>node ROOT/bin/cairn.js serve<br/>baked PATH, log to data/server.log"]
+  SP --> POLL{"Healthy within 20 s?<br/>(polls /api/health)"}
+  POLL -->|yes| OWN["Server owned by this app<br/>watchdog enabled"]
+  POLL -->|no| FAIL["Avatar shows offline<br/>see data/server.log"]
+  EXT --> B["Show avatar bubble 88x88<br/>bundled avatar page, restored position<br/>or top-right; Classic Bubble if it fails"]
+  OWN --> B
+  FAIL --> B
+  B --> HP["Every 3 s:<br/>GET /api/assistant/health"]
+  B --> CLK{"Click, Dock icon,<br/>⌥Space or attention?"}
+  CLK --> P["Chat panel<br/>WKWebView loads /web/bubble.html"]
+  P -->|"Esc, bubble click or collapse"| B
+    </pre></div>
+    <p class="diagram-caption">The app never starts a second server. If something is already answering on port 8787, it is used as-is, and the app will not kill it or restart it.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="watchdog">7. Health polling and watchdog</h2>
+    <p>The <strong>watchdog</strong> keeps an owned server alive. If this app started the server and three polls in a row fail (about 9 s), it terminates the child if it is still around and spawns a new one with the same command and baked environment. Runs that were in flight when the server died are recorded as <code>error: interrupted</code> in <code>runs.json</code>. The scheduler reloads <code>tasks.json</code>, so reminders are not lost. A server the app did not start is never restarted. Until it comes back you only see the avatar in its <em>offline</em> state.</p>
+    <div class="diagram-title">Figure 4 — Health and watchdog state machine</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> launching
+  launching --> healthy: server already running, or spawned and healthy
+  launching --> unreachable: spawned server not healthy within 20 s
+  healthy --> degraded: 1 failed poll
+  degraded --> degraded: 2nd failed poll
+  degraded --> healthy: poll succeeds
+  degraded --> unreachable: 3rd consecutive failure
+  unreachable --> restarting: app started the server (watchdog)
+  unreachable --> unreachable: not our server, offline dot, keep polling
+  unreachable --> healthy: poll succeeds
+  restarting --> healthy: new child healthy
+  restarting --> unreachable: still failing, retry on next failures
+  healthy --> [*]: Quit Cairn
+  note right of healthy
+    every 3 s set the avatar state
+    from runningRuns and pendingApprovals
+  end note
+</pre></div>
+    <p class="diagram-caption">The <em>offline</em> state appears from the first failed poll. The restart happens only when this app owns the server process, so a server you run in a terminal for debugging is left alone.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="interaction">8. Click vs drag</h2>
+    <p>The whole bubble is a drag handle and a button at the same time. The app tells the two apart by whether the pointer moved between mouse-down and mouse-up.</p>
+    <div class="diagram-title">Figure 5 — Click-vs-drag interaction (state machine)</div>
+    <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> idle
+  idle --> pressed: mouseDown (left button)
+  pressed --> dragging: mouseDragged (pointer moved)
+  pressed --> toggle: mouseUp with no movement
+  dragging --> dragging: mouseDragged, window follows pointer
+  dragging --> save: mouseUp
+  save --> idle: clamp to visible screens, store in UserDefaults, re-place panel
+  toggle --> idle: show or hide chat panel
+  idle --> menu: right-click or control-click
+  menu --> idle: item chosen or menu dismissed
+</pre></div>
+    <p class="diagram-caption">A drag never opens the panel, and a click never moves the bubble. If the panel is open while you drag, it is placed again next to the bubble's new position.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="bridge">9. Native ↔ web bridge</h2>
+    <p>The panel content is the same web UI you can open in a browser (<code>/web/bubble.html</code>). Inside the app, it talks to the native shell through a <code>WKScriptMessageHandler</code> named <code>cairn</code>. In a normal browser, <code>window.webkit</code> does not exist, so these calls do nothing.</p>
+    <div class="diagram-title">Figure 6 — Bridge messages and polling</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant W as bubble.js in WKWebView
+  participant H as Swift handler cairn
+  participant P as Chat panel
+  participant BB as Bubble
+  participant S as Cairn server
+  W->>H: postMessage type collapse
+  H->>P: hide panel (web state kept)
+  S--)W: SSE reminder or approval on /api/assistant/events
+  W->>H: postMessage type attention, title, message
+  H->>BB: avatar attention state for 10 s
+  opt auto-open setting on
+    H->>P: show panel next to the bubble
+  end
+  loop every 3 s
+    BB->>S: GET /api/assistant/health
+    S-->>BB: runningRuns, pendingApprovals
+    BB->>BB: window.cairnAvatar.setState(state, running, approvals)
+  end
+</pre></div>
+    <p class="diagram-caption">The JavaScript call is <code>window.webkit?.messageHandlers?.cairn?.postMessage({type:'collapse'})</code> or <code>{type:'attention', title, message}</code>. Only the message types listed here have any effect.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="always-on">10. Always on: what keeps running when</h2>
+    <p>Cairn follows the model of ChatGPT Agent and Grok Bot: you hand off a task and get on with your work. The work happens in the <strong>server</strong>, not in the bubble or the panel. See <a href="assistant.html#always-on">background runs</a>.</p>
+    <div class="diagram-title">Figure 7 — What keeps running when</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  E["Something happens"] --> A{"What?"}
+  A -->|"Panel closed (Esc or bubble click)"| K1["Runs and reminders continue.<br/>Web state kept."]
+  A -->|"Quit Cairn from the menu"| Q{"Did the app start<br/>the server?"}
+  Q -->|yes| K2["Server child terminated.<br/>In-flight runs become error: interrupted"]
+  Q -->|no| K3["Server keeps running.<br/>Runs and reminders continue."]
+  A -->|"Server crashed"| W{"Did the app start<br/>the server?"}
+  W -->|yes| K4["Watchdog restarts it<br/>after 3 failed polls"]
+  W -->|no| K5["Avatar offline until it is back"]
+  A -->|"Mac sleeps or lid closed"| K6["Everything pauses.<br/>Overdue one-shots fire once on wake,<br/>recurring tasks skip missed runs"]
+  A -->|"Log out or reboot"| K7["If Start at Login is on,<br/>the bubble relaunches and<br/>starts the server again"]
+    </pre></div>
+    <p class="diagram-caption">To keep tasks running while the bubble is quit, start the server yourself (<code>node bin/cairn.js serve</code>). The app detects it and leaves it alone.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="login">11. Start at Login</h2>
+    <p>Start at Login is <strong>opt-in only</strong>. The app never adds itself to your login items automatically. The toggle is in the bubble's right-click menu and in the Dock icon's menu. It uses <code>osascript</code> to ask <em>System Events</em> to add or remove a login item for the app's own path. The first time, macOS asks whether Cairn may control System Events.</p>
+    <div class="diagram-title">Figure 8 — Start at Login toggle</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TD
+  M["Right-click bubble:<br/>Start at Login"] --> ST{"Login item<br/>currently present?"}
+  ST -->|no| ADD["osascript: System Events<br/>make login item at end<br/>(path of Cairn.app, hidden false)"]
+  ST -->|yes| DEL["osascript: System Events<br/>delete login item Cairn"]
+  ADD --> PERM{"First time: macOS asks<br/>to allow control of System Events"}
+  PERM -->|Allow| ON["Checkmark on:<br/>Cairn starts at next login"]
+  PERM -->|"Don't Allow"| ERR["Stays off:<br/>grant later in Privacy and Security, Automation"]
+  DEL --> OFF["Checkmark off"]
+    </pre></div>
+    <pre class="code"><code># what the toggle runs (equivalent), no shell involved: execFile osascript -e …
+tell application "System Events" to make login item at end with properties {path:"/Applications/Cairn.app", hidden:false}
+tell application "System Events" to delete login item "Cairn"
+
+# check from Terminal
+$ osascript -e 'tell application "System Events" to get the name of every login item'</code></pre>
+    <p>You can also manage the item in <strong>System Settings → General → Login Items</strong>. The login item points to the copy you toggled it from, normally the installed <code>/Applications/Cairn.app</code>. If you switch between the build and the installed copy, or move the project, turn the toggle off and on again so the item points to the right path.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="install">12. Install &amp; launch</h2>
+    <style>
+      .app-icon-intro { display: flex; gap: 22px; align-items: center; margin: 14px 0 18px; }
+      .app-icon-intro img { flex: none; width: 128px; height: 128px; }
+      .app-icon-intro p { margin: 0; }
+      @media (max-width: 560px) { .app-icon-intro { flex-direction: column; align-items: flex-start; } }
+    </style>
+    <div class="app-icon-intro">
+      <img src="assets/screenshots/app-icon.png" width="128" height="128" alt="The Cairn app icon: a glowing aurora orb with a thin orbit ring on a midnight-blue rounded square">
+      <p>Install <code>Cairn.app</code> once and start it whenever you need it, like any other Mac app: from the <strong>Dock</strong>, <strong>Spotlight</strong>, the <strong>Apps</strong> view (<strong>Launchpad</strong> on macOS 15 and earlier) or the <strong>Applications</strong> folder. The icon is the Aurora Orb, the default avatar, on a midnight-blue tile. Its source is <code>desktop/icon/icon.html</code>. <code>bash desktop/icon/render.sh</code> regenerates <code>desktop/icon/Cairn.icns</code> from it, and <code>build.sh</code> copies that file into the app.</p>
+    </div>
+    <pre class="code"><code># from the project root: build if needed, quit a running Cairn, copy to /Applications, keep it in the Dock, start it
+$ node bin/cairn.js desktop --install
+$ bash desktop/install.sh                           # the same, without the CLI
+$ node bin/cairn.js desktop --install --no-launch   # install or update without starting it
+$ node bin/cairn.js desktop --install --no-dock     # install or update without adding it to the Dock
+$ node bin/cairn.js desktop --install --rebuild     # force a fresh build first</code></pre>
+    <table>
+      <tr><th>install.sh step</th><th>Detail</th></tr>
+      <tr><td>Build</td><td>Runs <code>build.sh</code> if <code>desktop/build/Cairn.app</code> is missing or older than its sources (<code>CairnBubble.swift</code>, <code>Info.plist</code>, <code>build.sh</code>, <code>desktop/icon/Cairn.icns</code>, <code>web/avatars/</code>), or always with <code>--rebuild</code>.</td></tr>
+      <tr><td>Quit</td><td>Quits any running Cairn, whether the build or an installed copy, with a normal Quit. If it is still running a few seconds later, it gets SIGTERM, which the app handles the same way. A server that Cairn started stops with it. A server you started yourself keeps running.</td></tr>
+      <tr><td>Copy</td><td><code>ditto</code> to <code>/Applications/Cairn.app</code>, or to <code>~/Applications/Cairn.app</code> if <code>/Applications</code> is not writable (<code>CAIRN_INSTALL_DIR</code> picks another folder). The copy keeps working away from the project because <code>build.sh</code> bakes absolute paths (project root, node, PATH, port) into its Info.plist. It still runs the server from this project and keeps your data in <code>&lt;project&gt;/data</code>, so do not move or delete the project folder.</td></tr>
+      <tr><td>Sign</td><td>Checks <code>codesign --verify --deep --strict</code> and re-signs ad-hoc (<code>codesign --force --deep -s -</code>) only if the copy no longer verifies</td></tr>
+      <tr><td>Register</td><td><code>lsregister -f</code> on the installed copy, and <code>lsregister -u</code> on the build copy so that <code>open -a Cairn</code> and the Apps view resolve to the installed one (LaunchServices prefers <code>/Applications</code> anyway), then touches the bundle so Finder, the Dock and Spotlight pick up the icon. It never restarts Finder.</td></tr>
+      <tr><td>Dock</td><td>Unless you pass <code>--no-dock</code> (or set <code>CAIRN_NO_DOCK=1</code>): if <code>com.apple.dock persistent-apps</code> has no tile for the installed path, it adds one and restarts the Dock once (<code>killall Dock</code>). If the tile is already there, it changes nothing. See <a href="#dock-pin">Keeping it in the Dock</a>.</td></tr>
+      <tr><td>Launch</td><td><code>open /Applications/Cairn.app</code>, then waits for <code>/api/assistant/health</code> to answer. <code>--no-launch</code> skips this step.</td></tr>
+    </table>
+
+    <h3 id="launching">Starting it</h3>
+    <ul>
+      <li><strong>Dock:</strong> click the Cairn icon. Once Cairn runs, the same click opens the chat.</li>
+      <li><strong>Spotlight:</strong> press ⌘Space, type <code>Cairn</code>, press Return.</li>
+      <li><strong>Apps / Launchpad:</strong> click the Cairn icon.</li>
+      <li><strong>Finder:</strong> double-click <code>Cairn</code> in the Applications folder.</li>
+      <li><strong>Terminal:</strong> <code>node bin/cairn.js desktop</code> (or <code>bash desktop/run.sh</code>) starts the installed copy if there is one, otherwise the build in <code>desktop/build</code>. <code>open -a Cairn</code> also works.</li>
+    </ul>
+    <div class="callout"><strong>In the Dock while it runs.</strong> Cairn shows its icon in the Dock (with a running dot) and in ⌘Tab, and has a menu bar while it is frontmost. Click the Dock icon to open the chat. Right-click the Dock icon for Open Chat, New Chat, Open Dashboard, Open Docs, the task and approval count, and Start at Login. The floating bubble at the top-right of your screen keeps its own right-click menu, and ⌥Space still toggles the chat panel. Starting Cairn again while it is already running opens the chat; a second copy never starts. To go back to a bubble-only app without a Dock icon, right-click the bubble → uncheck <strong>Show in Dock</strong>.</div>
+    <p><strong>Start at Login:</strong> to start Cairn every time you log in, right-click the bubble → <strong>Start at Login</strong> (see <a href="#login">Start at Login</a>). Turn it on from the installed app so the login item points to <code>/Applications/Cairn.app</code>. If you turned it on earlier from the build copy, turn it off and on again from the installed one.</p>
+
+    <h3 id="updating">Updating after code changes</h3>
+    <p>After you change the Swift app, an avatar or the icon, upgrade Node or move the project, update the installed copy with the same command: <code>node bin/cairn.js desktop --install</code>. It rebuilds what changed, quits the old copy and starts the new one. Plain <code>node bin/cairn.js desktop</code> also updates an installed copy whose build is out of date before starting it. Changes to the server (<code>src/</code>, and <code>web/</code> apart from the avatars) only need the server restarted, not a reinstall: right-click → <strong>Restart Server</strong> when Cairn started the server, or restart your own <code>serve</code>.</p>
+    <p><strong>Uninstall:</strong> quit Cairn (Dock icon → Quit, or right-click the bubble → Quit Cairn), remove it from the Dock (right-click the icon → Options → Remove from Dock), then move <code>/Applications/Cairn.app</code> to the Trash. To remove its preferences and web data as well, see <a href="#uninstall">Uninstall</a>.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="build">13. Build and run</h2>
+    <p>Requirements: macOS with the Xcode Command Line Tools (<code>xcode-select --install</code> provides <code>swiftc</code> and <code>codesign</code>), Node.js 20 or later, and the Claude CLI logged in (<code>claude</code> on your PATH or in <code>~/.local/bin</code>). There are no npm dependencies.</p>
+    <pre class="code"><code># from the project root
+$ node bin/cairn.js desktop --install # build, install into /Applications and start it (see Install &amp; launch)
+$ bash desktop/run.sh                 # start the installed app, or build if needed and open desktop/build/Cairn.app
+$ node bin/cairn.js desktop           # the same, from the Cairn CLI (--rebuild, --restart, --quit also work)
+
+# or step by step
+$ bash desktop/build.sh               # → desktop/build/Cairn.app (ad-hoc signed)
+$ open desktop/build/Cairn.app
+$ pgrep -f Cairn.app                  # confirm it is running
+$ osascript -e 'quit app "Cairn"'     # quit (also stops a server it started)</code></pre>
+    <table>
+      <tr><th>build.sh step</th><th>Detail</th></tr>
+      <tr><td>Bake paths</td><td>It writes the project root, the absolute path from <code>$(command -v node)</code>, and a PATH (node's directory, <code>~/.local/bin</code>, <code>/opt/homebrew/bin</code>, <code>/usr/local/bin</code>, <code>/usr/bin</code>, <code>/bin</code>) into a generated Swift constants file or Info.plist keys. Apps launched from Finder do not inherit your shell PATH, so without this the app could not find <code>node</code> or <code>claude</code>.</td></tr>
+      <tr><td>Bundle avatars</td><td>Copies <code>web/avatars/*.html</code> (and <code>index.json</code> and any assets) into <code>Cairn.app/Contents/Resources/avatars</code> and checks that <code>index.json</code>, if present, lists existing files. The app loads the avatar from this bundled copy first, then from <code>&lt;project&gt;/web/avatars</code>. <code>CAIRN_AVATAR_DIR</code> overrides both. Rebuild after changing an avatar.</td></tr>
+      <tr><td>Compile</td><td><code>swiftc -O -swift-version 5 -parse-as-library -framework Cocoa -framework WebKit</code> → <code>Cairn.app/Contents/MacOS/Cairn</code></td></tr>
+      <tr><td>Info.plist</td><td>Bundle id <code>com.cairn.bubble</code>, <code>LSUIElement=false</code> (a Dock app; the app switches itself to an accessory app when <code>CairnShowInDock</code> is off), <code>NSAppTransportSecurity → NSAllowsLocalNetworking=true</code> (allows plain HTTP to 127.0.0.1)</td></tr>
+      <tr><td>Icon</td><td>Copies <code>desktop/icon/Cairn.icns</code> to <code>Contents/Resources/Cairn.icns</code> (<code>CFBundleIconFile</code> <code>Cairn</code>). If that file is missing, it falls back to an icon drawn by the app's own bubble code (<code>Cairn --render-icon</code>).</td></tr>
+      <tr><td>Sign</td><td><code>codesign --force --deep -s -</code>: an <em>ad-hoc</em> signature, with no Developer ID and no notarization</td></tr>
+    </table>
+    <div class="callout">The web UI also works without the native app. Run <code>node bin/cairn.js serve</code> and open <code>http://127.0.0.1:8787/web/bubble.html</code> in any browser. You lose only the floating avatar with its states, and the watchdog.</div>
+
+    <!-- ============================================================== -->
+    <h2 id="state">14. Where state lives</h2>
+    <table>
+      <tr><th>What</th><th>Where</th><th>Notes</th></tr>
+      <tr><td>Bubble position, avatar style and app preferences</td><td><code>UserDefaults</code>, domain <code>com.cairn.bubble</code>: <code>CairnBubbleOrigin</code>, <code>CairnAvatarStyle</code>, <code>CairnStartAtLogin</code>, <code>CairnOpenOnAttention</code>, <code>CairnGlobalHotkey</code>, <code>CairnAutoStartServer</code>, <code>CairnShowInDock</code>, <code>CairnServerPid</code></td><td><code>defaults read com.cairn.bubble</code>. Right-click → Reset Position restores the default position. <code>defaults write com.cairn.bubble CairnAvatarStyle dots</code> picks a style from the terminal (<code>aurora</code>, <code>dots</code>, <code>buddy</code> or <code>classic</code>).</td></tr>
+      <tr><td>Avatar pages</td><td><code>Cairn.app/Contents/Resources/avatars/</code> (bundled copy), else <code>&lt;project&gt;/web/avatars/</code></td><td>Plain HTML files. <code>index.json</code> sets names and the default.</td></tr>
+      <tr><td>Panel web state (current conversation id)</td><td>WKWebView <code>localStorage</code> for <code>http://127.0.0.1:8787</code>, under <code>~/Library/WebKit/com.cairn.bubble/</code></td><td>Separate from your normal browser's storage</td></tr>
+      <tr><td>Server log (when the app started the server)</td><td><code>&lt;project&gt;/data/server.log</code></td><td>Read this first when the offline dot appears</td></tr>
+      <tr><td>Conversations</td><td><code>&lt;dataDir&gt;/conversations/&lt;id&gt;.json</code></td><td>Includes the Claude session id (<code>--resume</code>) and <code>allowAlways</code></td></tr>
+      <tr><td>Background runs log</td><td><code>&lt;dataDir&gt;/runs.json</code></td><td>A compact record of recent runs. In-flight runs become <code>error: interrupted</code> after a restart.</td></tr>
+      <tr><td>Reminders and recurring tasks</td><td><code>&lt;dataDir&gt;/tasks.json</code></td><td>Written atomically on every change</td></tr>
+      <tr><td>Shopping list</td><td><code>&lt;dataDir&gt;/shopping.json</code></td><td></td></tr>
+      <tr><td>Assistant settings</td><td><code>&lt;dataDir&gt;/assistant-settings.json</code></td><td>Model, budget, workDir, browser, notifications, concurrency</td></tr>
+      <tr><td>Engine config, audit, index, keys</td><td><code>&lt;dataDir&gt;/config.json</code>, <code>audit.ndjson</code>, <code>index.json</code>, <code>keys/</code></td><td>See <a href="architecture.html">Architecture</a></td></tr>
+      <tr><td>Dock tile</td><td><code>com.apple.dock</code> → <code>persistent-apps</code></td><td>Added once by <code>install.sh</code> unless you pass <code>--no-dock</code>. Right-click the icon → Options → uncheck Keep in Dock to remove it.</td></tr>
+      <tr><td>Login item</td><td>System Settings → General → Login Items</td><td>Only if you turned on Start at Login</td></tr>
+      <tr><td>Permissions</td><td>System Settings → Privacy &amp; Security (Automation, Reminders, Calendars) and Notifications</td><td>Granted per app by macOS</td></tr>
+      <tr><td>Items created in Apple apps</td><td>Reminders.app, Calendar.app</td><td>They belong to you and stay after you uninstall Cairn</td></tr>
+    </table>
+    <p><code>&lt;dataDir&gt;</code> is <code>&lt;project&gt;/data</code> by default, or <code>$CAIRN_HOME</code> if set for the server process.</p>
+
+    <!-- ============================================================== -->
+    <h2 id="troubleshooting">15. Troubleshooting</h2>
+    <table>
+      <tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr>
+      <tr><td>"Cairn.app can't be opened" / "Apple could not verify…"</td><td><strong>Gatekeeper.</strong> The app is ad-hoc signed and not notarized. An app you built yourself usually opens fine. The warning appears when the bundle was copied, downloaded or unzipped and so carries a quarantine attribute.</td><td>Build it yourself on this Mac (<code>bash desktop/build.sh</code>). If you trust the bundle, Control-click → Open, or System Settings → Privacy &amp; Security → <em>Open Anyway</em>. For a bundle you built yourself, <code>xattr -dr com.apple.quarantine /Applications/Cairn.app</code> (or <code>desktop/build/Cairn.app</code>) clears the flag. <code>spctl --assess</code> reports an ad-hoc app as rejected; that is expected and does not stop a local, unquarantined copy from opening.</td></tr>
+      <tr><td>The app or its <code>node</code> child is killed or quarantined, or the endpoint agent alerts</td><td><strong>EDR / SentinelOne</strong> (or a similar endpoint agent) flags an unsigned or new binary that spawns processes and runs <code>osascript</code>.</td><td>Ask your IT or security team to review it and <strong>allowlist the app path and hash</strong>: paths <code>/Applications/Cairn.app</code> and <code>…/DxBot/desktop/build/Cairn.app</code>, and hash from <code>shasum -a 256 /Applications/Cairn.app/Contents/MacOS/Cairn</code>. Give them <code>codesign -dv --verbose=4 desktop/build/Cairn.app</code> and this page. Rebuilding changes the hash. <strong>Never</strong> obfuscate, rename, repack or otherwise try to evade the agent, and do not disable it.</td></tr>
+      <tr><td>No notifications appear</td><td>Notifications are posted through <code>osascript display notification</code>. macOS lists them under the app that ran the script, often <em>Script Editor</em>, and they may be turned off or silenced by a Focus mode.</td><td>System Settings → Notifications → find <em>Script Editor</em> (or the listed sender) → Allow notifications, and choose Banners or Alerts. Check Focus modes too.</td></tr>
+      <tr><td>A prompt says "… wants access to control Reminders / Calendar", or a reminder fails with error −1743</td><td><strong>Automation permission</strong> (Apple Events). macOS asks once per controlling app and target app. The first Reminders or Calendar write triggers it. A privacy prompt for Reminders or Calendars data access may also appear.</td><td>Click OK or Allow. To change it later: System Settings → Privacy &amp; Security → <em>Automation</em> (and <em>Reminders</em> / <em>Calendars</em>). If you denied it by accident, turn the switch on there and try again.</td></tr>
+      <tr><td>The avatar is missing, or the Classic Bubble shows although you picked an avatar</td><td>The avatar page did not load or does not expose <code>window.cairnAvatar.setState</code>, so the app fell back to the native bubble. Often the app was built before the avatars existed.</td><td>Rebuild with <code>bash desktop/build.sh</code> so the pages are bundled. Right-click → Show Server Log and look for <code>avatar … unavailable</code>. Hover over the checked style in the Avatar submenu to see the error. Open the page in a browser (for example <code>web/avatars/avatar-aurora.html#state=working&amp;running=2</code>) to check that it renders.</td></tr>
+      <tr><td>Grey (or amber, Classic Bubble) dot on the bubble (avatar in the <em>offline</em> state)</td><td>The server is unreachable. It may be starting, crashed, the port may be busy, or node may be missing.</td><td>Check <code>data/server.log</code>. Run <code>curl -s http://127.0.0.1:8787/api/health</code> and <code>lsof -nP -iTCP:8787 -sTCP:LISTEN</code>. Try <code>node bin/cairn.js doctor</code>.</td></tr>
+      <tr><td>The watchdog keeps restarting the server</td><td>The server crashes on start, often because the baked <code>node</code> path changed (a Node upgrade or nvm switch) or the project moved</td><td>Read the end of <code>data/server.log</code>, then run <code>node bin/cairn.js desktop --install --rebuild</code> so the paths are baked again and the installed copy is updated</td></tr>
+      <tr><td>Chat replies say Claude is unavailable</td><td>The server cannot find <code>claude</code> on the baked PATH, or you are not logged in</td><td>Run <code>command -v claude</code> in Terminal and rebuild if it lives elsewhere. Or set <code>CAIRN_CLAUDE_BIN</code> for the server. Run <code>claude</code> once in a terminal to confirm the login.</td></tr>
+      <tr><td>Blank panel</td><td>The server was not ready yet, or <code>/web/bubble.html</code> is missing</td><td>Close and reopen the panel. Open <code>http://127.0.0.1:8787/web/bubble.html</code> in a browser to compare.</td></tr>
+      <tr><td>⌥Space does nothing</td><td>The global shortcut is turned off (right-click → <em>Global Shortcut ⌥Space</em>), or another app (for example the ChatGPT desktop app or a launcher) already owns ⌥Space.</td><td>Turn the toggle on, click the bubble instead, or change the other app's shortcut and toggle Cairn's off and on again</td></tr>
+      <tr><td>The bubble is off screen or hidden after a display change</td><td>A saved position from a monitor that is gone</td><td>Right-click → Reset Position, or quit and run <code>defaults delete com.cairn.bubble</code></td></tr>
+      <tr><td>The Start at Login toggle does not stick</td><td>Automation permission for System Events was denied</td><td>System Settings → Privacy &amp; Security → Automation → allow Cairn to control System Events, then toggle again</td></tr>
+      <tr><td>Finder, the Dock or the Apps view still shows the old icon</td><td>macOS caches app icons and refreshes them on its own</td><td>Wait a moment, or run <code>touch /Applications/Cairn.app</code>. Re-running <code>node bin/cairn.js desktop --install</code> registers the app again. Restarting Finder or the Dock is not needed.</td></tr>
+      <tr><td>Cairn is not in the Dock</td><td>It was installed with <code>--no-dock</code> or <code>CAIRN_NO_DOCK=1</code>, the tile was removed, or <em>Show in Dock</em> is off (then there is no icon while it runs)</td><td>Run <code>node bin/cairn.js desktop --install</code>, or drag Cairn from Applications to the Dock. For the running icon, right-click the bubble → check <strong>Show in Dock</strong>.</td></tr>
+      <tr><td>Two Cairn icons in the Dock</td><td>An older tile points to another copy, for example <code>desktop/build/Cairn.app</code>. <code>install.sh</code> reports it as "another Cairn tile".</td><td>Right-click the extra icon → Options → Remove from Dock</td></tr>
+      <tr><td>⌘C / ⌘V do nothing in the chat panel</td><td>An older build without the Edit menu</td><td>Update with <code>node bin/cairn.js desktop --install</code>. The self-test checks the Edit menu's key equivalents.</td></tr>
+      <tr><td>Spotlight lists Cairn twice</td><td>Spotlight also indexes the build in <code>desktop/build/Cairn.app</code>. Both copies are the same app, but only the installed one appears in Apps / Launchpad.</td><td>Pick the one in Applications. To hide the build, add the project's <code>desktop/build</code> folder in System Settings → Spotlight → Search Privacy.</td></tr>
+      <tr><td>Changes don't show up in the app you start from Spotlight</td><td>The installed copy is a snapshot of the build</td><td>Run <code>node bin/cairn.js desktop --install</code> after changing the Swift app, an avatar or the icon</td></tr>
+      <tr><td>Browser tasks fail to start</td><td>The Playwright MCP server is fetched with <code>npx</code> on first use and needs network access and a browser download</td><td>Run <code>npx -y @playwright/mcp@latest --help</code> once in Terminal, or set <code>allowBrowser:false</code> in assistant settings</td></tr>
+    </table>
+
+    <!-- ============================================================== -->
+    <h2 id="uninstall">16. Uninstall</h2>
+    <ol>
+      <li>If you turned on <strong>Start at Login</strong>, turn it off first from the right-click menu, or remove Cairn in System Settings → General → Login Items.</li>
+      <li>Quit Cairn: right-click the Dock icon → <strong>Quit</strong>, right-click the bubble → <strong>Quit Cairn</strong>, or run <code>osascript -e 'quit app "Cairn"'</code>. This also stops a server the app started.</li>
+      <li>Remove it from the Dock: right-click the Cairn icon → <strong>Options</strong> → <strong>Remove from Dock</strong>, or drag it out of the Dock.</li>
+      <li>Move the installed app to the Trash: drag <code>/Applications/Cairn.app</code> (or <code>~/Applications/Cairn.app</code>) to the Trash in Finder, or run <code>osascript -e 'tell application "Finder" to delete POSIX file "/Applications/Cairn.app"'</code>.</li>
+      <li>Remove the build and the app's preferences and web data:
+        <pre class="code"><code>$ rm -rf desktop/build
+$ defaults delete com.cairn.bubble
+$ rm -rf ~/Library/WebKit/com.cairn.bubble ~/Library/Caches/com.cairn.bubble ~/Library/HTTPStorages/com.cairn.bubble</code></pre></li>
+      <li>Optional: revoke permissions in System Settings → Privacy &amp; Security → Automation (and Reminders or Calendars), and in Notifications.</li>
+      <li>Optional, and this <strong>deletes your history</strong>: remove assistant data from <code>&lt;dataDir&gt;</code>. That is <code>conversations/</code>, <code>runs.json</code>, <code>tasks.json</code>, <code>shopping.json</code> and <code>assistant-settings.json</code>. Reminders and events you created in Apple apps stay where they are.</li>
+    </ol>
+    <p>Nothing is installed outside the project folder, <code>/Applications/Cairn.app</code>, the Dock tile and the standard per-app locations above. No launch daemons, kernel extensions, or background agents are installed.</p>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Cairn Assistant: your always-on personal desktop assistant.">
+  <title>Cairn Assistant</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cellipse cx='16' cy='26.5' rx='12.5' ry='4' fill='%2364748b'/%3E%3Cellipse cx='15.5' cy='19.8' rx='9.5' ry='3.5' fill='%2394a3b8'/%3E%3Cellipse cx='16.5' cy='13.6' rx='6.8' ry='3' fill='%230f766e'/%3E%3Cellipse cx='15.8' cy='8.2' rx='4.4' ry='2.5' fill='%23cbd5e1'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./bubble.css">
+  <script type="module" src="./bubble.js"></script>
+</head>
+<body>
+  <div class="panel" id="panel">
+    <!-- Header doubles as the drag region for the native floating panel. -->
+    <header class="hdr" data-drag-region>
+      <div class="hdr-brand">
+        <span class="hdr-logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="26" height="26" focusable="false">
+            <ellipse class="stone s1" cx="16" cy="26.5" rx="12.5" ry="4"/>
+            <ellipse class="stone s2" cx="15.5" cy="19.8" rx="9.5" ry="3.5"/>
+            <ellipse class="stone s3" cx="16.5" cy="13.6" rx="6.8" ry="3"/>
+            <ellipse class="stone s4" cx="15.8" cy="8.2" rx="4.4" ry="2.5"/>
+          </svg>
+        </span>
+        <span class="hdr-text">
+          <span class="hdr-title">Cairn <span id="health-dot" class="health-dot is-unknown" role="img" aria-label="Checking server health" title="Checking server health"></span></span>
+          <span id="hdr-status" class="hdr-status" role="status" aria-live="polite">Connecting…</span>
+        </span>
+      </div>
+      <div class="hdr-actions no-drag">
+        <button type="button" class="icon-btn" id="btn-new-chat" title="New chat" aria-label="New chat" data-icon="plus"></button>
+        <a class="icon-btn" id="btn-dashboard" href="/" target="_blank" rel="noopener" title="Open dashboard" aria-label="Open dashboard" data-icon="external"></a>
+        <button type="button" class="icon-btn" id="btn-collapse" title="Collapse (Esc)" aria-label="Collapse panel" data-icon="minimize"></button>
+      </div>
+    </header>
+
+    <nav class="tabs no-drag" role="tablist" aria-label="Assistant sections">
+      <button type="button" class="tab is-active" role="tab" id="tab-chat" aria-controls="view-chat" aria-selected="true" data-tab="chat">
+        <span class="tab-label">Chat</span><span class="tab-badge badge-amber" id="badge-chat" hidden></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-activity" aria-controls="view-activity" aria-selected="false" tabindex="-1" data-tab="activity">
+        <span class="tab-label">Activity</span><span class="tab-badge" id="badge-activity" hidden></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-tasks" aria-controls="view-tasks" aria-selected="false" tabindex="-1" data-tab="tasks">
+        <span class="tab-label">Tasks</span><span class="tab-badge badge-muted" id="badge-tasks" hidden></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-shopping" aria-controls="view-shopping" aria-selected="false" tabindex="-1" data-tab="shopping">
+        <span class="tab-label">Shopping</span><span class="tab-badge badge-muted" id="badge-shopping" hidden></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tab-history" aria-controls="view-history" aria-selected="false" tabindex="-1" data-tab="history">
+        <span class="tab-label">History</span>
+      </button>
+    </nav>
+
+    <!-- Reminders and approvals for background runs land here, visible on every tab. -->
+    <section id="alerts" class="alerts" aria-label="Alerts" aria-live="assertive"></section>
+
+    <main class="views">
+      <!-- ============================ Chat ============================ -->
+      <section class="view view-chat is-active" id="view-chat" role="tabpanel" aria-labelledby="tab-chat">
+        <div class="thread" id="thread" aria-live="polite" aria-label="Conversation">
+          <div class="welcome" id="welcome">
+            <div class="welcome-logo" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="44" height="44" focusable="false">
+                <ellipse class="stone s1" cx="16" cy="26.5" rx="12.5" ry="4"/>
+                <ellipse class="stone s2" cx="15.5" cy="19.8" rx="9.5" ry="3.5"/>
+                <ellipse class="stone s3" cx="16.5" cy="13.6" rx="6.8" ry="3"/>
+                <ellipse class="stone s4" cx="15.8" cy="8.2" rx="4.4" ry="2.5"/>
+              </svg>
+            </div>
+            <h1 class="welcome-title">Hi, I'm Cairn.</h1>
+            <p class="welcome-text">I set reminders, research the web, compare prices and do tasks on your Mac. I always ask before anything risky, and I keep working in the background while you do other things.</p>
+            <div class="welcome-grid" id="welcome-grid"></div>
+          </div>
+        </div>
+
+        <div class="run-bar" id="run-bar" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span class="run-bar-text" id="run-bar-text">Working…</span>
+          <span class="run-bar-time" id="run-bar-time"></span>
+        </div>
+
+        <div class="quick-chips" id="quick-chips" role="group" aria-label="Quick actions"></div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <label class="sr-only" for="composer-input">Message Cairn</label>
+          <textarea id="composer-input" class="composer-input" rows="1" maxlength="20000" placeholder="Ask anything or hand off a task…" enterkeyhint="send"></textarea>
+          <div class="composer-actions">
+            <button type="button" class="icon-btn btn-stop" id="btn-stop" title="Stop the current task" aria-label="Stop the current task" data-icon="stop" hidden></button>
+            <button type="submit" class="send-btn" id="btn-send" title="Send (Enter)" aria-label="Send" data-icon="send"></button>
+          </div>
+        </form>
+        <div class="composer-hint">Runs in the background · <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</div>
+      </section>
+
+      <!-- ========================== Activity ========================== -->
+      <section class="view view-activity" id="view-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+        <div class="view-head">
+          <div>
+            <h2 class="view-title">Background activity</h2>
+            <p class="view-sub" id="activity-summary">Nothing running right now.</p>
+          </div>
+          <button type="button" class="icon-btn" id="btn-refresh-runs" title="Refresh" aria-label="Refresh activity" data-icon="refresh"></button>
+        </div>
+        <div class="list" id="runs-list" aria-live="polite"></div>
+      </section>
+
+      <!-- ============================ Tasks =========================== -->
+      <section class="view view-tasks" id="view-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden>
+        <div class="view-head">
+          <div>
+            <h2 class="view-title">Reminders &amp; scheduled tasks</h2>
+            <p class="view-sub" id="tasks-summary">Nothing scheduled yet.</p>
+          </div>
+          <button type="button" class="icon-btn" id="btn-refresh-tasks" title="Refresh" aria-label="Refresh tasks" data-icon="refresh"></button>
+        </div>
+        <form class="quick-add" id="task-form" autocomplete="off">
+          <div class="seg" role="radiogroup" aria-label="Task type">
+            <label class="seg-opt"><input type="radio" name="task-kind" value="reminder" checked><span>Reminder</span></label>
+            <label class="seg-opt"><input type="radio" name="task-kind" value="agent"><span>Agent task</span></label>
+          </div>
+          <div class="quick-add-row">
+            <label class="sr-only" for="task-input">Describe the reminder or task</label>
+            <input id="task-input" class="input" type="text" maxlength="500" placeholder="e.g. Stretch every weekday at 3pm">
+            <button type="submit" class="btn btn-primary" id="btn-add-task">Add</button>
+          </div>
+          <div class="parse-preview" id="task-preview" aria-live="polite"></div>
+        </form>
+        <div class="list" id="tasks-list"></div>
+      </section>
+
+      <!-- =========================== Shopping ========================= -->
+      <section class="view view-shopping" id="view-shopping" role="tabpanel" aria-labelledby="tab-shopping" hidden>
+        <div class="view-head">
+          <div>
+            <h2 class="view-title">Shopping list</h2>
+            <p class="view-sub" id="shopping-summary">Cairn researches and compares; you always check out yourself.</p>
+          </div>
+          <button type="button" class="icon-btn" id="btn-refresh-shopping" title="Refresh" aria-label="Refresh shopping list" data-icon="refresh"></button>
+        </div>
+        <form class="quick-add" id="shop-form" autocomplete="off">
+          <div class="quick-add-row">
+            <label class="sr-only" for="shop-item">Item</label>
+            <input id="shop-item" class="input" type="text" maxlength="300" placeholder="Add an item, e.g. AA batteries">
+            <label class="sr-only" for="shop-price">Price</label>
+            <input id="shop-price" class="input input-price" type="text" maxlength="40" placeholder="Price">
+            <button type="submit" class="btn btn-primary">Add</button>
+          </div>
+        </form>
+        <div class="list" id="shopping-list"></div>
+      </section>
+
+      <!-- ============================ History ========================= -->
+      <section class="view view-history" id="view-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+        <div class="view-head">
+          <div>
+            <h2 class="view-title">Conversations</h2>
+            <p class="view-sub" id="history-summary">Pick up where you left off.</p>
+          </div>
+          <button type="button" class="icon-btn" id="btn-refresh-history" title="Refresh" aria-label="Refresh conversations" data-icon="refresh"></button>
+        </div>
+        <div class="quick-add">
+          <label class="sr-only" for="history-filter">Filter conversations</label>
+          <input id="history-filter" class="input" type="search" maxlength="200" placeholder="Filter conversations">
+        </div>
+        <div class="list" id="history-list"></div>
+      </section>
+    </main>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  </div>
+</body>
+</html>

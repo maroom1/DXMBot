@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security model — Cairn Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> Cairn</div>
+    <p class="tagline">Personal desktop assistant for macOS, with a transparent search engine</p>
+    <nav>
+      <div class="nav-group">Start</div>
+      <a href="index.html">Overview</a>
+      <a href="features.html">Feature catalogue</a>
+      <a href="naming.html">Why "Cairn"</a>
+      <div class="nav-group">Design</div>
+      <a href="architecture.html">Architecture</a>
+      <a href="workflows.html">Workflow diagrams</a>
+      <a href="robots.html">robots.txt compliance</a>
+      <a href="web-bot-auth.html">Identity &amp; Web Bot Auth</a>
+      <a href="agent.html">Claude agent &amp; MCP</a>
+      <a href="security.html">Security model</a>
+      <div class="nav-group">Use</div>
+      <a href="cli.html">CLI reference</a>
+      <a href="api.html">HTTP API reference</a>
+      <a href="site-owners.html">For site owners</a>
+      <a href="testing.html">Testing &amp; results</a>
+      <div class="nav-group">Assistant</div>
+      <a href="assistant.html">Desktop assistant</a>
+      <a href="desktop.html">Floating bubble app</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Security model</h1>
+    <p class="lead">Cairn is a single-user local tool. This page covers what it protects: the operator's machine and browser, the sites it visits, and the operator's Claude budget. It explains how each protection works, and it states plainly what is out of scope.</p>
+    <div class="toc"><strong>On this page</strong><ol>
+      <li><a href="#threat-model">Threat model</a></li>
+      <li><a href="#binding">Localhost binding</a></li>
+      <li><a href="#rebinding">DNS-rebinding Host guard</a></li>
+      <li><a href="#csrf">CSRF guard</a></li>
+      <li><a href="#ssrf">SSRF and <code>blockPrivateNetworks</code></a></li>
+      <li><a href="#outbound">Outbound honesty: no UA spoofing</a></li>
+      <li><a href="#redirects">robots.txt on every redirect hop</a></li>
+      <li><a href="#limits">Body, time and size limits</a></li>
+      <li><a href="#claude">Claude CLI isolation</a></li>
+      <li><a href="#mcp">MCP stdout hygiene</a></li>
+      <li><a href="#xss">XSS-safe rendering</a></li>
+      <li><a href="#keys">Signing-key storage</a></li>
+      <li><a href="#audit">Audit trail</a></li>
+      <li><a href="#retention">Data retention</a></li>
+      <li><a href="#hardening">Hardening from the security review</a></li>
+      <li><a href="#not-protected">What is NOT protected</a></li>
+    </ol></div>
+
+    <h2 id="threat-model">Threat model</h2>
+    <div class="diagram-title">Figure 1 — Trust boundaries and attack paths</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph LOCAL ["Operator machine - trusted"]
+    BR["Operator browser<br/>Web UI"]
+    CLI["CLI"]
+    SRV["Cairn server<br/>127.0.0.1:8787"]
+    CC["Claude CLI<br/>built-in tools off"]
+    MCP["MCP server<br/>5 tools"]
+    DATA[("data/<br/>keys 0600, index, audit")]
+  end
+  subgraph NET ["Internet - untrusted"]
+    SITE["Crawled websites<br/>untrusted HTML, redirects"]
+    EVIL["Malicious web page<br/>open in the operator's browser"]
+    INJ["Prompt-injection text<br/>inside fetched pages"]
+  end
+  ANT[("Anthropic API")]
+  BR -->|"JSON + Origin"| SRV
+  CLI --> SRV
+  SRV --> DATA
+  SRV -->|"robots-checked, signed, rate-limited"| SITE
+  SRV --> CC
+  CC --> ANT
+  CC -->|"stdio"| MCP
+  MCP -->|"loopback HTTP"| SRV
+  EVIL -.->|"T1 DNS rebinding: blocked by Host guard"| SRV
+  EVIL -.->|"T2 cross-site POST: blocked by CSRF guard"| SRV
+  SITE -.->|"T3 redirect to disallowed or private URL"| SRV
+  INJ -.->|"T4 steer the agent: tool allow-list, budget"| CC
+  SITE -.->|"T5 script in page text: escaped in UI"| BR
+    </pre></div>
+    <p class="diagram-caption">Dashed arrows are attack paths. Each label names the control that stops or bounds it.</p>
+
+    <div class="table-scroll"><table>
+      <thead><tr><th>#</th><th>Threat</th><th>Control</th><th>Residual risk</th></tr></thead>
+      <tbody>
+        <tr><td>T1</td><td>A web page uses DNS rebinding to reach the local API from the operator's browser</td><td>Host header allow-list, which returns 421 otherwise</td><td><span class="badge good">Low</span></td></tr>
+        <tr><td>T2</td><td>A web page submits cross-site requests (CSRF) to start crawls, change config or clear the index</td><td>POST/DELETE require <code>Content-Type: application/json</code>, a matching <code>Origin</code>, and no CORS headers. API GETs refuse cross-site/same-site Fetch Metadata, and the side-effecting <code>GET /api/ask/stream</code> needs positive same-origin proof</td><td><span class="badge good">Low</span></td></tr>
+        <tr><td>T3</td><td>A redirect or link steers the fetcher to a disallowed or internal URL</td><td>robots rechecked per hop. <code>blockPrivateNetworks</code> (opt-in) screens the first request, every hop and robots.txt fetches, including DNS answers. Cairn's own bot UAs cannot call its API</td><td><span class="badge warn">Medium</span> when the private-network block is off</td></tr>
+        <tr><td>T4</td><td>Prompt injection in fetched content steers the research agent</td><td>No built-in tools, 5 allow-listed MCP tools, budget and timeout caps, empty cwd</td><td><span class="badge warn">Medium</span>: it can still influence answers and trigger extra compliant fetches</td></tr>
+        <tr><td>T5</td><td>Stored XSS through page titles, snippets or markdown</td><td>Escape-then-render in the UI, CSP, <code>nosniff</code></td><td><span class="badge good">Low</span></td></tr>
+        <tr><td>T6</td><td>The signing private key is stolen and used to impersonate Cairn</td><td>File mode 0600, never served or logged. Only the JWKS is public</td><td><span class="badge warn">Medium</span> if the local account is compromised</td></tr>
+        <tr><td>T7</td><td>Resource exhaustion from huge, slow or endless responses</td><td>Byte cap, timeout, redirect cap, 1 MB request-body cap, page and depth caps, 4 concurrent answers, 64 SSE streams, bounded crawl frontier, linear-time HTML extraction</td><td><span class="badge good">Low</span></td></tr>
+        <tr><td>T8</td><td>Cairn harms the sites it visits (overload, ignored opt-outs)</td><td>HostScheduler politeness, Crawl-delay, backoff, robots for every role</td><td><span class="badge good">Low</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="binding">Localhost binding</h2>
+    <p>The server binds <code>127.0.0.1</code> by default (<code>config.host</code>, <code>CAIRN_HOST</code>). Nothing listens on external interfaces, and the demo fixture site also binds loopback. The API has <strong>no authentication</strong>. The loopback binding plus the Host and Origin guards below are the entire access-control story, so <strong>do not</strong> bind <code>0.0.0.0</code> or put Cairn behind a reverse proxy without adding authentication first.</p>
+
+    <h2 id="rebinding">DNS-rebinding Host guard</h2>
+    <p>In a DNS-rebinding attack, a malicious page at <code>evil.example</code> re-resolves its own name to <code>127.0.0.1</code>. The browser's same-origin policy then treats calls to the local API as same-origin. The browser still sends <code>Host: evil.example:8787</code>, so Cairn rejects every request whose <code>Host</code> is not exactly <code>127.0.0.1:&lt;port&gt;</code>, <code>localhost:&lt;port&gt;</code>, <code>[::1]:&lt;port&gt;</code>, the bind address with the port, or the host of an explicitly configured <code>CAIRN_PUBLIC_URL</code>, with <strong>421 Misdirected Request</strong>.</p>
+    <div class="diagram-title">Figure 2 — Inbound request guard pipeline</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart TB
+  R["Incoming request<br/>security headers set"] --> H{"Host is an allowed<br/>loopback name with our port?"}
+  H -->|"no"| E421["421 Misdirected Request"]
+  H -->|"yes"| UA{"/api/* with a Cairn<br/>bot User-Agent?"}
+  UA -->|"yes"| E403u["403 loop guard"]
+  UA -->|"no"| M{"Method"}
+  M -->|"GET or HEAD on /api"| G{"Origin allowed and<br/>Sec-Fetch-Site not<br/>cross-site or same-site?"}
+  G -->|"no"| E403g["403 Forbidden"]
+  G -->|"yes"| P{"/api/ask/stream?"}
+  P -->|"yes"| PR{"Same-origin proof?<br/>Fetch Metadata, X-Cairn-Client<br/>or cairn_ui cookie"}
+  PR -->|"no"| E403p["403 Forbidden"]
+  PR -->|"yes"| ROUTE["Route handler"]
+  P -->|"no"| ROUTE
+  M -->|"POST, DELETE, PUT, PATCH"| OM{"Origin absent or allowed,<br/>Sec-Fetch-Site not cross-site?"}
+  OM -->|"no"| E403b["403 Forbidden"]
+  OM -->|"yes"| CT{"Content-Type is<br/>application/json?"}
+  CT -->|"no"| E415["415 Unsupported Media Type"]
+  CT -->|"yes"| SZ{"Body at most 1 MB<br/>and a JSON object?"}
+  SZ -->|"no"| E413["413 or 400"]
+  SZ -->|"yes"| ROUTE
+  M -->|"other GET"| ROUTE
+    </pre></div>
+    <p class="diagram-caption">Guards run before routing (<code>createRequestHandler</code> in <code>src/server/app.js</code>), so no handler ever sees a request with a foreign Host, a cross-site Origin or one of Cairn's own bot User-Agents.</p>
+
+    <h2 id="csrf">CSRF guard</h2>
+    <ul>
+      <li><strong>JSON only for state changes.</strong> Every POST and DELETE must send <code>Content-Type: application/json</code>. HTML forms cannot send that type, and a cross-origin <code>fetch</code> with it triggers a CORS preflight. Cairn answers preflights with no <code>Access-Control-Allow-*</code> headers, so the browser never sends the real request.</li>
+      <li><strong>Origin check.</strong> If an <code>Origin</code> header is present, it must equal the server's own origin, or the request gets 403. Requests without an Origin (CLI, curl, the MCP server) are allowed. Modern browsers always send <code>Origin</code> on cross-site POSTs, and a request with a JSON body cannot be forged by a plain HTML form.</li>
+      <li><strong>Side-effecting GETs.</strong> A foreign page can trigger a GET without CORS (<code>&lt;img&gt;</code>, <code>EventSource</code>), and <code>GET /api/ask/stream</code> spends Claude budget and, in deep mode, starts fetches. So every API GET is refused (403) when <code>Origin</code> is foreign or <code>Sec-Fetch-Site</code> is <code>cross-site</code> or <code>same-site</code> (another localhost port), and <code>/api/ask/stream</code> additionally needs <em>positive</em> proof, because a browser without Fetch Metadata sends no header at all: <code>Sec-Fetch-Site: same-origin</code>/<code>none</code>, an <code>X-Cairn-Client</code> header (a cross-site page cannot add one without a preflight), or the UI's <code>cairn_ui</code> cookie (random per server start, <code>HttpOnly; SameSite=Strict</code>).</li>
+      <li><strong>Allowed origins.</strong> <code>http://</code> plus any allowed Host, and the explicit <code>CAIRN_PUBLIC_URL</code> origin (so an <code>https://</code> TLS proxy in front works).</li>
+      <li><strong>No CORS headers.</strong> Cairn never emits <code>Access-Control-Allow-Origin</code>, so other origins cannot read responses, including SSE streams.</li>
+    </ul>
+
+    <h2 id="ssrf">SSRF and <code>blockPrivateNetworks</code></h2>
+    <p>Cairn fetches URLs that come from crawl seeds, discovered links, redirects and the research agent. With <code>config.fetch.blockPrivateNetworks: true</code>, <code>Fetcher.screen()</code> refuses a target <strong>before any network activity</strong> — the first request, every redirect hop, and the <code>robots.txt</code> fetch (and its redirects) — when its host is in one of the ranges below (<code>isPrivateHost</code> in <code>src/util/url.js</code>). Page fetches return <code>blocked: {reason: 'private-network'}</code> with an audit entry; a refused robots.txt request is reported as "unreachable" (status 0), so that origin is disallow-all rather than allow-all.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Family</th><th>Blocked</th></tr></thead>
+      <tbody>
+        <tr><td>Names</td><td><code>localhost</code>, <code>*.localhost</code> (a trailing dot is ignored); any other name whose DNS answers include a blocked address (all addresses are checked; <code>127.0.0.1.nip.io</code>-style names are caught)</td></tr>
+        <tr><td>IPv4</td><td><code>0.0.0.0/8</code>, <code>10/8</code>, <code>127/8</code>, <code>100.64/10</code> (CGNAT), <code>169.254/16</code>, <code>172.16/12</code>, <code>192.168/16</code>, <code>192.0.0/24</code>, <code>198.18/15</code> (benchmarking), <code>224/4</code> multicast and everything above (reserved, broadcast)</td></tr>
+        <tr><td>IPv6</td><td><code>::</code>, <code>::1</code>, <code>fc00::/7</code>, <code>fe80::/10</code>, <code>fec0::/10</code>, <code>ff00::/8</code> multicast</td></tr>
+        <tr><td>IPv4 embedded in IPv6</td><td>IPv4-mapped <code>::ffff:a.b.c.d</code>, deprecated IPv4-compatible <code>::a.b.c.d</code> and NAT64 <code>64:ff9b::/96</code> — blocked when the embedded IPv4 address is in a blocked range above</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>It is off by default</strong>, because the bundled demo site and the tests run on <code>127.0.0.1</code>. Turn it on (<code>POST /api/config {"fetch":{"blockPrivateNetworks":true}}</code>) whenever you crawl the open web with the research agent enabled. Otherwise, prompt-injected text could ask the agent to <code>fetch_page</code> internal services. (Cairn's own API is protected either way: requests carrying a Cairn bot User-Agent get 403.) <strong>Limitation:</strong> the DNS check and the connection resolve the name separately, so a name that changes its answer between the two (DNS rebinding against the fetcher) is not caught, and a failed lookup is left to the request itself. Use network-level egress controls if that matters to you.</div>
+    <p>The scheme is always checked: only <code>http:</code> and <code>https:</code> URLs are fetched (<code>normalizeUrl</code> returns <code>null</code> for anything else). Credentials in URLs (<code>user:pass@</code>) and fragments are stripped during normalisation.</p>
+
+    <h2 id="outbound">Outbound honesty: no UA spoofing</h2>
+    <p>Every request carries the role's real UA (<code>CairnSearch/1.0</code>, <code>CairnCorpus/1.0</code> or <code>Cairn-User/1.0</code>, plus <code>+…/bot</code>), a <code>From:</code> contact header, and Web Bot Auth signature headers when signing is enabled. There is no code path that sets a browser UA, rotates IPs, sends cookies or retries around a block. This is a security property as well as an ethical one: the operator's traffic is attributable, and nobody can mistake it for an attack tool.</p>
+
+    <h2 id="redirects">robots.txt on every redirect hop</h2>
+    <p>Redirects are followed manually (up to <code>config.fetch.maxRedirects</code>, 5 by default). Each hop is re-validated for scheme, private network and robots.txt before it is requested. A cross-origin hop loads the new origin's robots.txt first. A redirect therefore cannot be used to launder a disallowed URL.</p>
+    <div class="diagram-title">Figure 3 — A redirect into a disallowed path</div>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant F as Fetcher
+  participant RC as RobotsCache
+  participant S as site.example
+  F->>RC: check /redirect-to-private as CairnSearch
+  RC-->>F: allowed
+  F->>S: GET /redirect-to-private
+  S-->>F: 302 Location /private/secret.html
+  F->>RC: check /private/secret.html as CairnSearch
+  RC-->>F: disallowed by Disallow /private/
+  Note over F: stop - blocked robots<br/>audit entry, no request sent
+  F-->>F: FetchResult blocked, redirects recorded
+    </pre></div>
+    <p class="diagram-caption">The e2e test asserts that the fixture never receives a request for <code>/private/secret.html</code>, even when a redirect points there.</p>
+
+    <h2 id="limits">Body, time and size limits</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Limit</th><th>Default</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td>Response body cap (truncated, <code>truncated: true</code>)</td><td>5 MiB</td><td><code>config.fetch.maxBytes</code></td></tr>
+        <tr><td>Per-request timeout (AbortController)</td><td>15 s</td><td><code>config.fetch.timeoutMs</code></td></tr>
+        <tr><td>Redirect hops</td><td>5</td><td><code>config.fetch.maxRedirects</code></td></tr>
+        <tr><td>Retries on 429, 5xx or network error</td><td>2, with backoff capped at 60 s</td><td><code>config.fetch.retries</code>, <code>config.politeness</code></td></tr>
+        <tr><td>robots.txt parse window</td><td>First 500 KiB</td><td><code>src/robots/parser.js</code></td></tr>
+        <tr><td>JSON request body to the API</td><td>1 MB (413; the connection is dropped past 16 MB)</td><td><code>src/server/app.js</code></td></tr>
+        <tr><td>Concurrent answers (<code>/api/ask</code> + <code>/api/ask/stream</code>)</td><td>4, then 429</td><td><code>MAX_CONCURRENT_ASKS</code>, <code>src/server/api.js</code></td></tr>
+        <tr><td>Open engine SSE streams</td><td>64, then 503 with <code>Retry-After: 5</code></td><td><code>MAX_SSE_CLIENTS</code>, <code>src/server/sse.js</code></td></tr>
+        <tr><td>Unread data buffered for one SSE client</td><td>1 MiB, then the client is dropped</td><td><code>MAX_BUFFERED_BYTES</code>, <code>src/server/sse.js</code></td></tr>
+        <tr><td>robots.txt <code>Crawl-delay</code> honoured</td><td>Up to 300 s; larger values mean "disallowed"</td><td><code>MAX_CRAWL_DELAY_SEC</code>, <code>src/net/fetcher.js</code></td></tr>
+        <tr><td>robots.txt cache</td><td>TTL ≤ 24 h (failures ≤ 10 min), 2000 origins</td><td><code>src/robots/cache.js</code></td></tr>
+        <tr><td>Crawl frontier</td><td>5000 links taken per page; pending URLs ≤ min(100 000, 10 × remaining page budget); URL sets released when the job ends</td><td><code>src/crawl/crawler.js</code></td></tr>
+        <tr><td>HTML nesting tracked by the extractor</td><td>256 block levels, 256 skipped-element levels, 16 markdown indent levels</td><td><code>src/extract/html.js</code></td></tr>
+        <tr><td>Retry-After honoured</td><td>Waited inline up to 60 s; recorded for the host up to 24 h</td><td><code>src/net/fetcher.js</code>, <code>src/net/ratelimit.js</code></td></tr>
+        <tr><td>Crawl scope</td><td>50 pages, depth 2, same site</td><td><code>config.crawl</code></td></tr>
+        <tr><td>Sitemap expansion</td><td>3 index levels, 1000 URLs</td><td><code>src/crawl/crawler.js</code></td></tr>
+        <tr><td><code>/api/fetch</code> response</td><td>Markdown up to 20k chars, 200 links</td><td><code>src/server/api.js</code></td></tr>
+        <tr><td>MCP <code>fetch_page</code> result</td><td>Up to 12k chars</td><td><code>src/agent/mcp-server.js</code></td></tr>
+        <tr><td>MCP <code>crawl_site</code></td><td>Up to 25 pages, depth 2, 90 s poll</td><td><code>src/agent/mcp-server.js</code></td></tr>
+        <tr><td>Claude run</td><td>$1.50 budget, 240 s wall clock</td><td><code>config.agent.maxBudgetUsd</code>, <code>config.agent.timeoutMs</code></td></tr>
+        <tr><td>In-memory audit ring</td><td>2000 entries (the file keeps everything)</td><td><code>src/util/audit.js</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="claude">Claude CLI isolation</h2>
+    <p>The Claude CLI is the most capable component, so it gets the tightest box. <code>src/agent/claude.js</code> starts it with <code>child_process.spawn</code> using an argument array and <strong>no shell</strong>. The prompt is written to <strong>stdin</strong>, so no question text is ever interpolated into a command line.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Control</th><th>Mechanism</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Built-in tools disabled</td><td><code>--tools ""</code></td><td>No Bash, file read/write/edit, web fetch or web search. The model cannot touch the filesystem or the network directly</td></tr>
+        <tr><td>Only Cairn's MCP server</td><td><code>--strict-mcp-config --mcp-config &lt;tmp.json&gt;</code></td><td>User and project MCP servers on the machine are ignored</td></tr>
+        <tr><td>Five allow-listed tools</td><td><code>--allowedTools mcp__cairn__search_index,mcp__cairn__fetch_page,mcp__cairn__crawl_site,mcp__cairn__check_robots,mcp__cairn__index_stats</code></td><td>Every web access goes through Cairn's fetcher, so it is robots-checked, rate-limited, signed and audited</td></tr>
+        <tr><td>Spending cap</td><td><code>--max-budget-usd</code> (<code>config.agent.maxBudgetUsd</code>, 1.5)</td><td>A runaway loop cannot drain the account</td></tr>
+        <tr><td>Wall-clock timeout and cancellation</td><td>Process killed on <code>config.agent.timeoutMs</code> or client abort</td><td>No orphaned agents</td></tr>
+        <tr><td>Empty working directory</td><td><code>cwd = data/agent-work</code> (created empty)</td><td>No project <code>CLAUDE.md</code>, settings or source files enter the context</td></tr>
+        <tr><td>No session persistence</td><td><code>--no-session-persistence</code></td><td>Research transcripts are not stored by the CLI</td></tr>
+        <tr><td>Quick answers have no tools at all</td><td>No MCP config and no allowed tools</td><td>Quick mode is a pure text transformation over retrieved passages</td></tr>
+      </tbody>
+    </table></div>
+    <div class="diagram-title">Figure 4 — What the agent can and cannot reach</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph BOX ["Claude CLI process - cwd data/agent-work"]
+    M["Model turn loop"]
+  end
+  M -->|"allowed"| T1["search_index"]
+  M -->|"allowed"| T2["fetch_page"]
+  M -->|"allowed"| T3["crawl_site - 25 pages max"]
+  M -->|"allowed"| T4["check_robots"]
+  M -->|"allowed"| T5["index_stats"]
+  T1 --> API["Cairn HTTP API<br/>loopback"]
+  T2 --> API
+  T3 --> API
+  T4 --> API
+  T5 --> API
+  API --> F["Fetcher<br/>robots, politeness, signing, audit"]
+  M -.->|"denied"| X1["Shell / Bash"]
+  M -.->|"denied"| X2["Local files"]
+  M -.->|"denied"| X3["Direct web fetch or search"]
+  M -.->|"denied"| X4["Other MCP servers"]
+    </pre></div>
+    <p class="diagram-caption">The only path from the model to the web is the MCP server, then the HTTP API, then the same Fetcher every other component uses. A robots refusal comes back to the model as tool-result text, and the system prompt tells it to respect refusals.</p>
+
+    <h2 id="mcp">MCP stdout hygiene</h2>
+    <p><code>src/agent/mcp-server.js</code> speaks JSON-RPC 2.0 as newline-delimited JSON over stdio. <strong>stdout carries protocol frames only</strong>, and every log line goes to stderr. This prevents a whole class of bugs and injection risks: a stray <code>console.log</code> that corrupts framing, or page text echoed to stdout that the client parses as a protocol message. Page content only ever travels inside a JSON-encoded <code>tools/call</code> result (<code>{content:[{type:'text', text}]}</code>), so it cannot break out of the frame. The server talks only to <code>CAIRN_API</code> on loopback, and it records source ids in the temporary <code>CAIRN_SOURCES_FILE</code>.</p>
+
+    <h2 id="xss">XSS-safe rendering</h2>
+    <ul>
+      <li>The web UI never assigns unescaped server data to <code>innerHTML</code>. Titles, snippets, headers and audit fields go in through <code>textContent</code> or are escaped first.</li>
+      <li>Markdown (answers and extracted pages) is <strong>escaped first, then</strong> a minimal formatter adds headings, bold, code, lists and links. Raw HTML in the source can never survive. Link targets must be <code>http(s):</code>. Index URLs are already normalised by <code>normalizeUrl</code>, which drops every other scheme, and the renderer must also refuse <code>javascript:</code> links in model output.</li>
+      <li>HTML responses carry <code>Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:</code>, which blocks inline and third-party scripts. All responses carry <code>X-Content-Type-Options: nosniff</code>.</li>
+      <li>No CDN assets. Mermaid for these docs is served locally from <code>docs/assets/mermaid.min.js</code> with <code>securityLevel: 'strict'</code>.</li>
+    </ul>
+
+    <h2 id="keys">Signing-key storage</h2>
+    <p>The Web Bot Auth Ed25519 key pair is generated on first run in <code>data/keys/</code>. <code>ed25519-private.pem</code> is written with mode <strong>0600</strong>, so only the operator's account can read it. <code>ed25519-public.pem</code> and the JWKS at <code>/.well-known/http-message-signatures-directory</code> are public by design. The key id is the RFC 7638 JWK thumbprint. The private key is never served, logged or sent to Claude.</p>
+    <p><strong>Rotation:</strong> stop Cairn, delete <code>data/keys/</code> and restart. A new key id is published immediately. Site owners who pinned the old key id must update. Signatures expire 300 s after creation and carry a random nonce, which limits replay.</p>
+
+    <h2 id="audit">Audit trail</h2>
+    <p>Every HTTP attempt (including robots.txt fetches and retries), every robots block, crawl events and agent runs (model, cost, duration, success) are appended to <code>data/audit.ndjson</code> by <code>src/util/audit.js</code>. The last 2000 entries are also kept in memory for the UI and <code>GET /api/audit</code>, and new entries stream over <code>GET /api/audit/stream</code>. Fetch entries record role, token, URL, final URL, status, bytes, elapsed time, robots decision and matched rule, block reason, whether the request was signed, and the attempt number. If a site owner asks what Cairn did on their site, the log answers it.</p>
+
+    <h2 id="retention">Data retention</h2>
+    <div class="diagram-title">Figure 5 — What is stored, where, and how to delete it</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  D[("data/ or CAIRN_HOME")]
+  D --> A["audit.ndjson<br/>grows without limit"]
+  D --> I["index.json<br/>page text of indexed docs"]
+  D --> C["corpus/job.jsonl<br/>collected page text"]
+  D --> K["keys/<br/>signing key pair"]
+  D --> G["config.json<br/>editable settings"]
+  D --> W["agent-work/<br/>empty cwd"]
+  I -->|"cairn index clear<br/>or POST /api/index/clear"| DEL1["Deleted"]
+  A -->|"delete or rotate the file"| DEL2["Deleted"]
+  C -->|"delete the JSONL file"| DEL3["Deleted"]
+    </pre></div>
+    <p class="diagram-caption">Nothing leaves the machine except outbound fetches and the prompts the Claude CLI sends to Anthropic. There is no automatic expiry. The operator owns retention.</p>
+    <ul>
+      <li><strong>Page text</strong> of public pages is stored unencrypted in <code>index.json</code> and in corpus JSONL files. Treat the data directory as containing third-party content, and respect the source sites' terms when you share or reuse it.</li>
+      <li><strong>Questions and retrieved passages</strong> are sent to Anthropic through the Claude CLI under the operator's own account and data policy. Cairn itself does not store transcripts (the CLI runs with <code>--no-session-persistence</code>).</li>
+      <li><strong>Temporary files</strong> (the MCP config and the sources registry for deep research) live in the OS temp directory for the duration of a run.</li>
+      <li>Use <code>CAIRN_HOME</code> or <code>--data-dir</code> to keep separate, disposable data directories per project.</li>
+    </ul>
+
+    <h2 id="hardening">Hardening from the security review</h2>
+    <p>A security and compliance review of the server, fetcher, robots handling, extractor and config led to the fixes below. Each one changes behaviour a caller or site owner can observe. The request-side fixes form one guard chain in <code>src/server/app.js</code>, followed by per-route limits:</p>
+    <div class="diagram-title">Figure 6 — Request guard chain</div>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  A["Host"] -->|"ok"| B["Bot-UA loop guard<br/>/api/* only"]
+  B -->|"ok"| C["Origin / CSRF<br/>plus ask/stream proof"]
+  C -->|"ok"| D["Content-Type<br/>writes only"]
+  D -->|"ok"| E["Size<br/>1 MB JSON object"]
+  E -->|"ok"| F["Route"]
+  F --> G["Limits<br/>4 answers, 64 SSE"]
+  A -.->|"421"| X(["Error JSON"])
+  B -.->|"403"| X
+  C -.->|"403"| X
+  D -.->|"415"| X
+  E -.->|"413 / 400"| X
+  G -.->|"429 / 503"| X
+    </pre></div>
+    <p class="diagram-caption">The first failing check answers with an error JSON; nothing after it runs. The per-route limits apply only to the answer and SSE routes.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Issue</th><th>Fix</th><th>File</th></tr></thead>
+      <tbody>
+        <tr><td>A prompt-injected agent (or a crawl) could make Cairn's fetcher call Cairn's own API, e.g. <code>fetch_page http://127.0.0.1:8787/api/…</code></td><td>Any <code>/api/*</code> request whose User-Agent contains <code>CairnSearch/</code>, <code>CairnCorpus/</code> or <code>Cairn-User/</code> plus a version digit gets <code>403</code> before routing</td><td><code>src/server/app.js</code></td></tr>
+        <tr><td><code>GET /api/ask/stream</code> could be triggered cross-site by browsers that send no Fetch Metadata (an <code>&lt;img&gt;</code> or no-cors GET)</td><td>API GETs reject foreign <code>Origin</code> and <code>Sec-Fetch-Site: cross-site/same-site</code>; the stream also needs same-origin proof (<code>Sec-Fetch-Site: same-origin/none</code>, <code>X-Cairn-Client</code> header, or the <code>SameSite=Strict</code> <code>cairn_ui</code> cookie), else <code>403</code></td><td><code>src/server/app.js</code></td></tr>
+        <tr><td>Unbounded concurrent answers could spawn many Claude CLI processes</td><td>At most 4 answers at once across <code>/api/ask</code> and <code>/api/ask/stream</code>; the next gets <code>429</code> (JSON, before any stream opens)</td><td><code>src/server/api.js</code></td></tr>
+        <tr><td>Unbounded SSE connections</td><td>At most 64 engine streams; the next gets <code>503</code> with <code>Retry-After: 5</code></td><td><code>src/server/sse.js</code></td></tr>
+        <tr><td>A client that stops reading made the server buffer events without limit</td><td>The stream is closed and the socket destroyed once more than 1 MiB is buffered; an aborted ask stream also aborts its run</td><td><code>src/server/sse.js</code></td></tr>
+        <tr><td>500 responses echoed internal error messages (file paths)</td><td>Unexpected errors return <code>{"error": "Internal server error", "id": "&lt;12 hex&gt;"}</code>; the details are logged to stderr under that id</td><td><code>src/server/app.js</code></td></tr>
+        <tr><td>Config merge could write <code>__proto__</code>/<code>constructor</code>/<code>prototype</code> (prototype pollution via <code>POST /api/config</code> or <code>config.json</code>)</td><td>Those keys are skipped by <code>deepMerge</code>; validation accepts own keys only (<code>Object.hasOwn</code>), so they are <code>400</code> "Unknown config key"</td><td><code>src/config.js</code>, <code>src/server/api.js</code></td></tr>
+        <tr><td>CR/LF in config strings (e.g. <code>contact</code>) could inject headers into every outgoing request</td><td>Strings and string-array entries containing <code>U+0000</code>–<code>U+001F</code> or <code>U+007F</code> are rejected with <code>400</code></td><td><code>src/server/api.js</code></td></tr>
+        <tr><td>A robots cache TTL over 24 h could be configured (RFC 9309 §2.4)</td><td><code>robots.cacheTtlMs</code> above 86 400 000 is rejected with <code>400</code>; the cache caps it at 24 h anyway and reads it at use time, so lowering it shortens existing entries</td><td><code>src/server/api.js</code>, <code>src/robots/cache.js</code></td></tr>
+        <tr><td>A hostile <code>Crawl-delay</code> (days) could hold requests indefinitely</td><td>A <code>Crawl-delay</code> above 300 s is treated as a disallow for that role (<code>blocked.reason: "robots"</code>, <code>crawlDelayLimit: 300</code>); it is not treated as an opt-out, so indexed copies are kept</td><td><code>src/net/fetcher.js</code>, <code>src/crawl/crawler.js</code></td></tr>
+        <tr><td>A robots block on a redirect hop was explained with the first URL's decision</td><td><code>FetchResult.blocked.robots</code> carries the blocking hop's own decision, and <code>/api/fetch</code> returns it as <code>robots</code></td><td><code>src/net/fetcher.js</code>, <code>src/server/api.js</code></td></tr>
+        <tr><td><code>X-Robots-Tag</code> parsing could miss restrictions: an <code>otherbot:</code> scope also swallowed the unscoped header lines joined after it</td><td>Fails closed: a foreign <code>&lt;bot&gt;:</code> prefix scopes only the directive attached to it; bare directives always apply; empty or malformed scopes are ignored; <code>max-snippet:0</code> means <code>nosnippet</code> and <code>nocache</code> means <code>noarchive</code></td><td><code>src/net/fetcher.js</code>, <code>src/extract/html.js</code></td></tr>
+        <tr><td>Private-network blocking skipped robots.txt fetches and literal-name checks missed many ranges</td><td>With <code>blockPrivateNetworks</code> on, the first request, every hop and robots.txt fetches are screened (including DNS answers) against the expanded ranges in <a href="#ssrf">SSRF</a>: CGNAT, benchmarking, multicast/reserved, IPv4-mapped/compatible IPv6, NAT64, site-local</td><td><code>src/util/url.js</code>, <code>src/net/fetcher.js</code></td></tr>
+        <tr><td><code>/api/fetch</code> with <code>index: true</code> could index pages a <code>CairnSearch</code> crawl would refuse</td><td>The page must be allowed for the fetching role and <code>CairnSearch</code>; <code>CairnSearch</code>-scoped <code>noindex</code>/<code>nosnippet</code>/<code>noarchive</code> apply; canonical and content-hash dedupe match the crawler; a real opt-out removes an old copy</td><td><code>src/server/api.js</code></td></tr>
+        <tr><td>Deeply nested or unterminated markup could make HTML extraction quadratic and stall the event loop</td><td>Linear-time lexing (one forward scan for raw-text close tags, unterminated quotes stop at the next <code>&gt;</code>) and nesting caps (256 block, 256 skip, 16 markdown levels)</td><td><code>src/extract/html.js</code></td></tr>
+        <tr><td>Crawl frontier and seen-URL sets could grow without bound</td><td>At most 5000 links per page and min(100 000, 10 × remaining pages) pending URLs; the sets are released when the job finishes; the robots cache keeps at most 2000 origins and the scheduler prunes idle hosts above 1000</td><td><code>src/crawl/crawler.js</code>, <code>src/robots/cache.js</code>, <code>src/net/ratelimit.js</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>API-facing details (exact error bodies, per-route notes) are in the <a href="api.html#security">HTTP API reference</a>; robots semantics are in <a href="robots.html#status">robots.txt compliance</a>.</p>
+
+    <h2 id="not-protected">What is NOT protected</h2>
+    <div class="callout bad"><strong>Know these limits before you rely on Cairn.</strong></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Not protected</th><th>Why / what to do</th></tr></thead>
+      <tbody>
+        <tr><td>Other local users or processes calling the API</td><td>The API has no authentication. Any process on the machine can call <code>127.0.0.1:8787</code>. Do not run Cairn on shared multi-user hosts.</td></tr>
+        <tr><td>Network exposure</td><td>Binding to a non-loopback interface or putting Cairn behind a proxy is unsupported. The Host guard will also reject the proxied Host.</td></tr>
+        <tr><td>Private-network SSRF by default</td><td><code>blockPrivateNetworks</code> is off by default. When on, it checks DNS answers but cannot stop a name that re-resolves between the check and the connection. Enable it for open-web research and add egress firewalling if needed.</td></tr>
+        <tr><td>Answer integrity against prompt injection</td><td>A malicious page can still bias or falsify an answer drawn from it. Citations let the reader check, but Cairn does not detect injection.</td></tr>
+        <tr><td>Data at rest</td><td>The index, corpus and audit log are plain files. Use full-disk encryption. Only the private key has restrictive permissions.</td></tr>
+        <tr><td>A compromised operator account</td><td>Whoever controls the account controls the key, the data and the Claude CLI credentials, which the CLI manages outside Cairn.</td></tr>
+        <tr><td>Local TLS</td><td>The local API is plain HTTP on loopback. That is acceptable only because it never leaves the machine.</td></tr>
+        <tr><td>Trust in Node.js and the Claude CLI</td><td>With zero npm dependencies, the supply chain is Node.js itself plus the Claude CLI binary. Keep both updated from trusted sources.</td></tr>
+        <tr><td>Sites' content, from anyone else</td><td>robots.txt is a voluntary protocol. Cairn honours it, but that gives site owners no protection against clients that do not.</td></tr>
+        <tr><td>Legal or terms-of-service compliance</td><td>Honouring robots.txt is necessary but not sufficient. The operator is responsible for how collected content is used, especially corpus data.</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="footer">Cairn 1.0 · Documentation generated for local review.</div>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  document.querySelectorAll('.sidebar nav a').forEach(a => { if (location.pathname.endsWith('/' + a.getAttribute('href'))) a.classList.add('active'); });
+</script>
+</body>
+</html>
